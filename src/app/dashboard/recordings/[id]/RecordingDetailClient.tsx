@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/Toast'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { DetailPageSkeleton } from '@/components/ui/Skeleton'
+import AudioEditor from '@/components/AudioEditor'
 import { User } from '@supabase/supabase-js'
 import { Recording, Transcript } from '@/types/database'
 
@@ -30,6 +31,9 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
   // Delete modal
   const [deleteModal, setDeleteModal] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  
+  // Editor
+  const [showEditor, setShowEditor] = useState(false)
   
   const router = useRouter()
   const toast = useToast()
@@ -162,6 +166,46 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
       toast.error('Failed to delete recording')
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  const handleSaveEditedAudio = async (blob: Blob, newFileName: string) => {
+    if (!supabase) return
+
+    try {
+      // Upload new file
+      const newFilePath = `${user.id}/${newFileName}`
+      
+      const { error: uploadError } = await supabase.storage
+        .from('audio-files')
+        .upload(newFilePath, blob, {
+          contentType: 'audio/wav',
+          cacheControl: '3600',
+        })
+
+      if (uploadError) throw uploadError
+
+      // Delete old file
+      await supabase.storage.from('audio-files').remove([recording.file_path])
+
+      // Update recording in database
+      const { error: updateError } = await supabase
+        .from('recordings')
+        .update({
+          file_path: newFilePath,
+          file_name: newFileName,
+          file_size: blob.size,
+        })
+        .eq('id', recording.id)
+
+      if (updateError) throw updateError
+
+      // Refresh the page to show updated recording
+      setShowEditor(false)
+      router.refresh()
+    } catch (err) {
+      console.error('Save edited audio error:', err)
+      throw err
     }
   }
 
@@ -322,16 +366,28 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-3">
             {audioUrl && (
-              <a
-                href={audioUrl}
-                download={recording.file_name}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Download Audio
-              </a>
+              <>
+                <a
+                  href={audioUrl}
+                  download={recording.file_name}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Download Audio
+                </a>
+                
+                <button
+                  onClick={() => setShowEditor(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
+                  </svg>
+                  Edit Audio
+                </button>
+              </>
             )}
             
             {!transcript && currentStatus === 'done' && (
@@ -492,6 +548,20 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
         variant="danger"
         loading={isDeleting}
       />
+
+      {/* Audio Editor Modal */}
+      {showEditor && audioUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/90 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <AudioEditor
+              audioUrl={audioUrl}
+              fileName={recording.file_name}
+              onSave={handleSaveEditedAudio}
+              onCancel={() => setShowEditor(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

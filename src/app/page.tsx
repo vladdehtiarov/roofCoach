@@ -46,31 +46,36 @@ export default function Home() {
               height={60}
               className="mx-auto mb-6 h-auto"
             />
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500/10 border border-amber-500/20 rounded-full text-amber-400 text-sm font-medium">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-full text-red-400 text-sm font-medium">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
               </svg>
-              Audio coaching made simple
+              Record your calls & meetings
             </div>
           </div>
           
           <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold text-white tracking-tight mb-6">
-            Upload. Analyze.{' '}
-            <span className="bg-gradient-to-r from-amber-400 via-orange-400 to-red-400 bg-clip-text text-transparent">
+            Record. Review.{' '}
+            <span className="bg-gradient-to-r from-red-400 via-amber-400 to-orange-400 bg-clip-text text-transparent">
               Improve.
             </span>
           </h1>
           
           <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-10">
-            RoofCoach helps roofing professionals capture and manage audio recordings from sales calls, inspections, and team meetings. Upload files up to 3 hours long.
+            RoofCoach helps roofing professionals record and analyze sales calls, inspections, and team meetings. Capture audio directly from your browser or upload existing files.
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               href="/signup"
-              className="w-full sm:w-auto px-8 py-4 text-lg font-semibold text-white bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 rounded-xl shadow-lg shadow-amber-500/25 transition-all"
+              className="w-full sm:w-auto px-8 py-4 text-lg font-semibold text-white bg-gradient-to-r from-red-500 to-rose-500 hover:from-red-600 hover:to-rose-600 rounded-xl shadow-lg shadow-red-500/25 transition-all flex items-center justify-center gap-2"
             >
-              Start for free
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
+              Start Recording Free
             </Link>
             <Link
               href="/login"
@@ -80,8 +85,24 @@ export default function Home() {
             </Link>
           </div>
 
-          {/* Features */}
+          {/* Features - Recording First & Prominent */}
           <div className="grid sm:grid-cols-3 gap-6 mt-20">
+            {/* Recording Feature - Primary */}
+            <div className="p-6 bg-gradient-to-br from-red-500/10 to-rose-500/5 backdrop-blur-sm rounded-2xl border border-red-500/30 relative overflow-hidden">
+              <div className="absolute top-0 right-0 px-2 py-1 bg-red-500/20 text-red-400 text-xs font-medium rounded-bl-lg">
+                Primary
+              </div>
+              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-red-500/30 to-rose-500/20 flex items-center justify-center mb-4 mx-auto">
+                <svg className="w-7 h-7 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                  <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-white mb-2">One-Tap Recording</h3>
+              <p className="text-slate-400 text-sm">Record calls and meetings directly in your browser. Up to 3 hours per session.</p>
+            </div>
+            
+            {/* Upload Feature */}
             <div className="p-6 bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50">
               <div className="w-12 h-12 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4 mx-auto">
                 <svg className="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -89,27 +110,18 @@ export default function Home() {
                 </svg>
               </div>
               <h3 className="text-lg font-semibold text-white mb-2">Easy Upload</h3>
-              <p className="text-slate-400 text-sm">Drag & drop audio files up to 500MB. Support for MP3, WAV, M4A, and more.</p>
+              <p className="text-slate-400 text-sm">Drag & drop existing audio files. Support for MP3, WAV, M4A, and more.</p>
             </div>
             
+            {/* Secure Storage Feature */}
             <div className="p-6 bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50">
-              <div className="w-12 h-12 rounded-xl bg-orange-500/20 flex items-center justify-center mb-4 mx-auto">
-                <svg className="w-6 h-6 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              <div className="w-12 h-12 rounded-xl bg-emerald-500/20 flex items-center justify-center mb-4 mx-auto">
+                <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-white mb-2">Secure Storage</h3>
-              <p className="text-slate-400 text-sm">Your recordings are encrypted and stored securely in the cloud.</p>
-            </div>
-            
-            <div className="p-6 bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50">
-              <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center mb-4 mx-auto">
-                <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-2">Instant Playback</h3>
-              <p className="text-slate-400 text-sm">Listen to your recordings anytime, anywhere with our built-in audio player.</p>
+              <h3 className="text-lg font-semibold text-white mb-2">Secure & Private</h3>
+              <p className="text-slate-400 text-sm">Your recordings are encrypted and only visible to you. Full privacy control.</p>
             </div>
           </div>
         </div>

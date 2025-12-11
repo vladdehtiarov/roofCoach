@@ -6,6 +6,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 import AudioUploader from '@/components/AudioUploader'
+import AudioRecorder from '@/components/AudioRecorder'
 import { useToast } from '@/components/ui/Toast'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { RecordingListSkeleton } from '@/components/ui/Skeleton'
@@ -18,6 +19,7 @@ interface RecordingWithUrl extends RecordingWithTranscript {
 
 type FilterType = 'active' | 'archived' | 'all'
 type SortType = 'newest' | 'oldest' | 'name' | 'size'
+type InputMode = 'upload' | 'record'
 
 const ITEMS_PER_PAGE = 10
 
@@ -30,6 +32,7 @@ export default function DashboardClient({ user }: { user: User }) {
   const [currentPage, setCurrentPage] = useState(1)
   const [isAdmin, setIsAdmin] = useState(false)
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null)
+  const [inputMode, setInputMode] = useState<InputMode>('record')
   
   // Delete modal state
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; recording: RecordingWithUrl | null }>({
@@ -346,14 +349,74 @@ export default function DashboardClient({ user }: { user: User }) {
         {/* Welcome Section */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-white">Welcome back!</h1>
-          <p className="text-slate-400 mt-1">Upload and manage your audio recordings</p>
+          <p className="text-slate-400 mt-1">
+            Record your calls and meetings to improve your coaching
+          </p>
         </div>
 
-        {/* Upload Section */}
+        {/* Record/Upload Section - Recording is Primary */}
         <div className="mb-12">
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
-            <h2 className="text-xl font-semibold text-white mb-4">Upload Audio</h2>
-            <AudioUploader onUploadComplete={handleUploadComplete} />
+          <div className="bg-gradient-to-br from-slate-800/70 to-slate-900/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 overflow-hidden">
+            {/* Header with emphasis on recording */}
+            <div className="bg-gradient-to-r from-red-500/10 via-slate-800/50 to-amber-500/10 border-b border-slate-700/50 px-6 py-4">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500/30 to-rose-500/30 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                      <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold text-white">Capture Audio</h2>
+                    <p className="text-slate-400 text-sm">Record calls, meetings, or upload existing files</p>
+                  </div>
+                </div>
+
+                {/* Tabs - Record first, more prominent */}
+                <div className="flex items-center bg-slate-900/50 rounded-xl p-1 border border-slate-700/50">
+                  <button
+                    onClick={() => setInputMode('record')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      inputMode === 'record'
+                        ? 'bg-gradient-to-r from-red-500 to-rose-500 text-white shadow-lg shadow-red-500/25'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                      <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                    Record
+                    {inputMode === 'record' && (
+                      <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setInputMode('upload')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      inputMode === 'upload'
+                        ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-amber-500/25'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    Upload
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              {inputMode === 'record' ? (
+                <AudioRecorder onRecordingComplete={handleUploadComplete} />
+              ) : (
+                <AudioUploader onUploadComplete={handleUploadComplete} />
+              )}
+            </div>
           </div>
         </div>
 
