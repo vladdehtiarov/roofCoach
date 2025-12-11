@@ -16,10 +16,6 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "RoofCoach - Audio Coaching for Roofing Professionals",
   description: "Upload and manage audio recordings from sales calls, inspections, and team meetings. Support for files up to 3 hours.",
-  icons: {
-    icon: "/roof_coach_logo.png",
-    apple: "/roof_coach_logo.png",
-  },
 };
 
 export default function RootLayout({

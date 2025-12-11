@@ -11,7 +11,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <Image
-              src="/roof_coach_logo.png"
+              src="/Logo.svg"
               alt="RoofCoach"
               width={140}
               height={40}
@@ -40,7 +40,7 @@ export default function Home() {
         <div className="max-w-4xl mx-auto text-center">
           <div className="mb-8 mt-8">
             <Image
-              src="/roof_coach_logo.png"
+              src="/Logo.svg"
               alt="RoofCoach"
               width={200}
               height={60}

@@ -236,7 +236,7 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
               </Link>
               <Link href="/">
                 <Image
-                  src="/roof_coach_logo.png"
+                  src="/Logo.svg"
                   alt="RoofCoach"
                   width={140}
                   height={40}

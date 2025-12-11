@@ -56,7 +56,7 @@ export default function LoginPage() {
         <div className="relative bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-700/50 p-8">
           <div className="text-center mb-8">
             <Image
-              src="/roof_coach_logo.png"
+              src="/Logo.svg"
               alt="RoofCoach"
               width={180}
               height={54}

@@ -309,7 +309,7 @@ export default function DashboardClient({ user }: { user: User }) {
           <div className="flex items-center justify-between h-16">
             <Link href="/">
               <Image
-                src="/roof_coach_logo.png"
+                src="/Logo.svg"
                 alt="RoofCoach"
                 width={140}
                 height={40}
