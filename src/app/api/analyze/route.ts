@@ -11,7 +11,20 @@ export const maxDuration = 900
 const CHUNK_DURATION_MINUTES = 30 // Request transcript in 30-minute chunks
 const RATE_LIMIT_DELAY_MS = 20000 // 20 seconds between requests (Gemini has 250K tokens/min limit)
 const MODEL_NAME = 'gemini-2.0-flash-exp'
-const MAX_CONCURRENT_ANALYSES = 1 // Only 1 analysis at a time for 512MB RAM limit
+
+// Smart queue configuration based on file size (for 512MB RAM limit)
+// Small files use less RAM, so we can process more concurrently
+const QUEUE_CONFIG = {
+  SMALL_FILE_THRESHOLD_MB: 15,   // Files under 15MB are "small"
+  MEDIUM_FILE_THRESHOLD_MB: 30,  // Files 15-30MB are "medium"
+  MAX_CONCURRENT_SMALL: 3,       // Up to 3 small files at once
+  MAX_CONCURRENT_MEDIUM: 2,      // Up to 2 medium files at once
+  MAX_CONCURRENT_LARGE: 1,       // Only 1 large file at a time
+  MAX_TOTAL_CONCURRENT: 3,       // Never more than 3 total
+}
+
+// Enable smart queue for both dev and production
+const ENABLE_QUEUE = true
 
 // Gemini pricing (per 1M tokens) - approximate for cost estimation
 const GEMINI_PRICING = {
@@ -82,77 +95,144 @@ export async function POST(request: Request) {
 
     // Use compressed analysis file if available (much smaller, saves RAM!)
     const analysisFilePath = recording.analysis_file_path || filePath
+    const analysisFileSize = recording.analysis_file_size || recording.file_size || 0
+    const fileSizeMB = analysisFileSize / (1024 * 1024)
+    
     if (recording.analysis_file_path) {
-      console.log(`Using compressed analysis file: ${recording.analysis_file_path}`)
+      console.log(`Using compressed analysis file: ${recording.analysis_file_path} (${fileSizeMB.toFixed(2)}MB)`)
     } else {
-      console.log(`No analysis file, using original: ${filePath}`)
+      console.log(`No analysis file, using original: ${filePath} (${fileSizeMB.toFixed(2)}MB)`)
     }
 
-    // Check queue - limit concurrent analyses to prevent memory overload
-    // Only count analyses started in the last 30 minutes (ignore stuck ones)
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    // Determine file size category
+    const getFileSizeCategory = (sizeMB: number): 'small' | 'medium' | 'large' => {
+      if (sizeMB < QUEUE_CONFIG.SMALL_FILE_THRESHOLD_MB) return 'small'
+      if (sizeMB < QUEUE_CONFIG.MEDIUM_FILE_THRESHOLD_MB) return 'medium'
+      return 'large'
+    }
     
-    const { data: activeAnalyses, error: queueError } = await supabase
-      .from('audio_analyses')
-      .select('id, recording_id, created_at')
-      .eq('processing_status', 'processing')
-      .gte('created_at', thirtyMinutesAgo) // Only recent ones
-      .order('created_at', { ascending: true })
+    const currentFileCategory = getFileSizeCategory(fileSizeMB)
 
-    if (!queueError && activeAnalyses && activeAnalyses.length >= MAX_CONCURRENT_ANALYSES) {
-      // Check if this recording is already in queue or processing
-      const existingForRecording = activeAnalyses.find(a => a.recording_id === recordingId)
-      if (existingForRecording) {
-        return NextResponse.json({ message: 'Analysis already in progress or queued' }, { status: 400 })
-      }
-
-      // Check for existing pending analysis
-      const { data: pendingAnalysis } = await supabase
-        .from('audio_analyses')
-        .select('id')
-        .eq('recording_id', recordingId)
-        .eq('processing_status', 'pending')
-        .single()
-
-      if (pendingAnalysis) {
-        return NextResponse.json({ message: 'Already in queue' }, { status: 400 })
-      }
-
-      // Create a pending analysis record so it shows in queue
-      await supabase.from('audio_analyses').insert({
-        recording_id: recordingId,
-        processing_status: 'pending',
-        transcript: '',
-        sections: [],
-        timeline: [],
-        main_topics: [],
-        glossary: [],
-        insights: [],
-        title: 'Queued for analysis...',
-        summary: '',
-        conclusion: '',
-        total_chunks: 0,
-        completed_chunks: 0,
-        current_chunk_message: 'Waiting in queue...',
-        input_tokens: 0,
-        output_tokens: 0,
-        total_tokens: 0,
-        model_used: '',
-        estimated_cost_usd: 0,
-      })
-
-      // Calculate queue position
-      const queuePosition = activeAnalyses.length - MAX_CONCURRENT_ANALYSES + 1
-      console.log(`Queue full (${activeAnalyses.length}/${MAX_CONCURRENT_ANALYSES}). Recording ${recordingId} added to queue.`)
+    // Smart queue check
+    if (ENABLE_QUEUE) {
+      // Check queue - smart queue based on file sizes
+      // Only count analyses started in the last 30 minutes (ignore stuck ones)
+      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
       
-      return NextResponse.json({ 
-        message: 'Added to queue. Analysis will start automatically when server is free.',
-        queued: true,
-        queuePosition: queuePosition + 1,
-        activeCount: activeAnalyses.length,
-        maxConcurrent: MAX_CONCURRENT_ANALYSES,
-        retryAfterSeconds: 60
-      }, { status: 202 }) // 202 Accepted - queued for processing
+      // Get active analyses with their recording file sizes
+      const { data: activeAnalyses, error: queueError } = await supabase
+        .from('audio_analyses')
+        .select(`
+          id, 
+          recording_id, 
+          created_at,
+          recordings!inner(analysis_file_size, file_size)
+        `)
+        .eq('processing_status', 'processing')
+        .gte('created_at', thirtyMinutesAgo)
+        .order('created_at', { ascending: true })
+
+      if (!queueError && activeAnalyses) {
+        // Calculate current load by category
+        let smallCount = 0
+        let mediumCount = 0
+        let largeCount = 0
+        
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        activeAnalyses.forEach((a: any) => {
+          const rec = Array.isArray(a.recordings) ? a.recordings[0] : a.recordings
+          const size = (rec?.analysis_file_size || rec?.file_size || 0) / (1024 * 1024)
+          const category = getFileSizeCategory(size)
+          if (category === 'small') smallCount++
+          else if (category === 'medium') mediumCount++
+          else largeCount++
+        })
+
+        const totalActive = activeAnalyses.length
+        
+        // Determine if we can start this analysis
+        let canStart = true
+        let reason = ''
+        
+        if (totalActive >= QUEUE_CONFIG.MAX_TOTAL_CONCURRENT) {
+          canStart = false
+          reason = `Max total (${QUEUE_CONFIG.MAX_TOTAL_CONCURRENT}) reached`
+        } else if (currentFileCategory === 'small' && smallCount >= QUEUE_CONFIG.MAX_CONCURRENT_SMALL) {
+          canStart = false
+          reason = `Max small files (${QUEUE_CONFIG.MAX_CONCURRENT_SMALL}) reached`
+        } else if (currentFileCategory === 'medium' && mediumCount >= QUEUE_CONFIG.MAX_CONCURRENT_MEDIUM) {
+          canStart = false
+          reason = `Max medium files (${QUEUE_CONFIG.MAX_CONCURRENT_MEDIUM}) reached`
+        } else if (currentFileCategory === 'large' && largeCount >= QUEUE_CONFIG.MAX_CONCURRENT_LARGE) {
+          canStart = false
+          reason = `Max large files (${QUEUE_CONFIG.MAX_CONCURRENT_LARGE}) reached`
+        }
+        
+        // Also check if any large file is processing - limit other files too
+        if (canStart && largeCount > 0 && totalActive >= 2) {
+          canStart = false
+          reason = 'Large file processing, limiting concurrency'
+        }
+
+        console.log(`Queue status: ${totalActive} active (S:${smallCount} M:${mediumCount} L:${largeCount}), current file: ${currentFileCategory} (${fileSizeMB.toFixed(1)}MB)`)
+
+        if (!canStart) {
+          // Check if this recording is already in queue or processing
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const existingForRecording = activeAnalyses.find((a: any) => a.recording_id === recordingId)
+          if (existingForRecording) {
+            return NextResponse.json({ message: 'Analysis already in progress or queued' }, { status: 400 })
+          }
+
+          // Check for existing pending analysis
+          const { data: pendingAnalysis } = await supabase
+            .from('audio_analyses')
+            .select('id')
+            .eq('recording_id', recordingId)
+            .eq('processing_status', 'pending')
+            .single()
+
+          if (pendingAnalysis) {
+            return NextResponse.json({ message: 'Already in queue' }, { status: 400 })
+          }
+
+          // Create a pending analysis record so it shows in queue
+          await supabase.from('audio_analyses').insert({
+            recording_id: recordingId,
+            processing_status: 'pending',
+            transcript: '',
+            sections: [],
+            timeline: [],
+            main_topics: [],
+            glossary: [],
+            insights: [],
+            title: 'Queued for analysis...',
+            summary: '',
+            conclusion: '',
+            total_chunks: 0,
+            completed_chunks: 0,
+            current_chunk_message: `Waiting in queue... (${reason})`,
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+            model_used: '',
+            estimated_cost_usd: 0,
+          })
+
+          console.log(`Queue: ${reason}. Recording ${recordingId} added to queue.`)
+          
+          return NextResponse.json({ 
+            message: `Added to queue. ${reason}. Analysis will start automatically.`,
+            queued: true,
+            queuePosition: totalActive,
+            activeCount: totalActive,
+            maxConcurrent: QUEUE_CONFIG.MAX_TOTAL_CONCURRENT,
+            fileCategory: currentFileCategory,
+            fileSizeMB: fileSizeMB.toFixed(1),
+            retryAfterSeconds: 30
+          }, { status: 202 })
+        }
+      }
     }
 
     // Check for existing analysis
