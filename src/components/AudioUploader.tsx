@@ -34,17 +34,19 @@ export default function AudioUploader({
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState<UploadProgress | null>(null)
+  const [uploadStage, setUploadStage] = useState<'uploading' | 'compressing' | 'uploading-analysis' | 'done'>('uploading')
   const [error, setError] = useState<string | null>(null)
   const [uploadedRecording, setUploadedRecording] = useState<Recording | null>(null)
+  const [uploadedSizes, setUploadedSizes] = useState<{ original: number; compressed: number | null }>({ original: 0, compressed: null })
   const [fileName, setFileName] = useState<string>('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const xhrRef = useRef<XMLHttpRequest | null>(null)
   const recordingIdRef = useRef<string | null>(null)
   
-  // Compression state
-  const [showCompressionModal, setShowCompressionModal] = useState(false)
-  const [pendingFile, setPendingFile] = useState<File | null>(null)
-  const [compressionRequired, setCompressionRequired] = useState(false)
+  // Compression state (modal removed - compression happens silently)
+  const [showCompressionModal, setShowCompressionModal] = useState(false) // Legacy, kept for compatibility
+  const [pendingFile, setPendingFile] = useState<File | null>(null) // Legacy
+  const [compressionRequired, setCompressionRequired] = useState(false) // Legacy
   const [compression, setCompression] = useState<CompressionState>({
     isCompressing: false,
     progress: 0,
@@ -422,6 +424,163 @@ export default function AudioUploader({
     toast.info('Upload cancelled')
   }
 
+  // Helper: upload file to storage with progress
+  const uploadToStorage = async (
+    file: File | Blob, 
+    filePath: string, 
+    accessToken: string,
+    onProgress?: (percentage: number) => void
+  ): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhrRef.current = xhr
+      
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable && onProgress) {
+          const percentage = Math.round((event.loaded / event.total) * 100)
+          onProgress(percentage)
+        }
+      })
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve()
+        } else {
+          reject(new Error(`Upload failed with status ${xhr.status}`))
+        }
+      })
+
+      xhr.addEventListener('error', () => reject(new Error('Upload failed')))
+      xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')))
+
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+      xhr.open('POST', `${supabaseUrl}/storage/v1/object/audio-files/${filePath}`)
+      xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`)
+      xhr.setRequestHeader('x-upsert', 'true')
+      xhr.send(file)
+    })
+  }
+
+  // Silent compression for AI analysis (no UI feedback)
+  const compressForAnalysis = async (file: File): Promise<File | null> => {
+    if (!ffmpegRef.current || !ffmpegLoaded) {
+      console.log('FFmpeg not loaded, skipping compression')
+      return null
+    }
+
+    try {
+      const ffmpeg = ffmpegRef.current
+      let fileToCompress = file
+
+      // Convert WebM/OGG first if needed
+      if (needsBrowserConversion(file.name) && file.size <= MAX_BROWSER_CONVERSION_SIZE) {
+        try {
+          fileToCompress = await convertWithWebAudioSilent(file)
+        } catch {
+          console.log('Browser conversion failed, using original')
+          return null
+        }
+      }
+
+      const inputExt = fileToCompress.name.split('.').pop()?.toLowerCase() || 'mp3'
+      const inputFileName = `input_analysis.${inputExt}`
+      const outputFileName = 'output_analysis.mp3'
+
+      // Calculate aggressive bitrate for small file size
+      const { bitrate, sampleRate } = calculateOptimalBitrate(file.size)
+      console.log(`[Analysis compression] ${formatFileSize(file.size)} -> ${bitrate}bps @ ${sampleRate}Hz`)
+
+      await ffmpeg.writeFile(inputFileName, await fetchFile(fileToCompress))
+      
+      await ffmpeg.exec([
+        '-i', inputFileName,
+        '-vn',
+        '-ac', '1',
+        '-ar', sampleRate,
+        '-b:a', bitrate,
+        '-y',
+        outputFileName
+      ])
+
+      const data = await ffmpeg.readFile(outputFileName)
+      
+      // Cleanup
+      try {
+        await ffmpeg.deleteFile(inputFileName)
+        await ffmpeg.deleteFile(outputFileName)
+      } catch { /* ignore */ }
+
+      const compressedBlob = new Blob([new Uint8Array(data as Uint8Array)], { type: 'audio/mpeg' })
+      const compressedFile = new File([compressedBlob], 'analysis.mp3', { type: 'audio/mpeg' })
+      
+      console.log(`[Analysis compression] Result: ${formatFileSize(compressedFile.size)}`)
+      return compressedFile
+    } catch (err) {
+      console.error('Analysis compression failed:', err)
+      return null
+    }
+  }
+
+  // Silent Web Audio conversion (no UI)
+  const convertWithWebAudioSilent = async (file: File): Promise<File> => {
+    const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
+    const arrayBuffer = await file.arrayBuffer()
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+    
+    // Resample to 8kHz mono for maximum compression
+    const offlineContext = new OfflineAudioContext(1, audioBuffer.duration * 8000, 8000)
+    const source = offlineContext.createBufferSource()
+    source.buffer = audioBuffer
+    source.connect(offlineContext.destination)
+    source.start(0)
+    
+    const resampledBuffer = await offlineContext.startRendering()
+    
+    // Convert to WAV
+    const wavBlob = audioBufferToWavSilent(resampledBuffer)
+    return new File([wavBlob], 'converted.wav', { type: 'audio/wav' })
+  }
+
+  // WAV encoder (silent version)
+  const audioBufferToWavSilent = (buffer: AudioBuffer): Blob => {
+    const numOfChan = buffer.numberOfChannels
+    const length = buffer.length * numOfChan * 2 + 44
+    const bufferArray = new ArrayBuffer(length)
+    const view = new DataView(bufferArray)
+    const channels: Float32Array[] = []
+    let offset = 0
+    let pos = 0
+
+    const setUint16 = (data: number) => { view.setUint16(pos, data, true); pos += 2 }
+    const setUint32 = (data: number) => { view.setUint32(pos, data, true); pos += 4 }
+
+    setUint32(0x46464952)
+    setUint32(length - 8)
+    setUint32(0x45564157)
+    setUint32(0x20746d66)
+    setUint32(16)
+    setUint16(1)
+    setUint16(numOfChan)
+    setUint32(buffer.sampleRate)
+    setUint32(buffer.sampleRate * numOfChan * 2)
+    setUint16(numOfChan * 2)
+    setUint16(16)
+    setUint32(0x61746164)
+    setUint32(length - pos - 4)
+
+    for (let i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i))
+    while (pos < length) {
+      for (let i = 0; i < numOfChan; i++) {
+        let sample = Math.max(-1, Math.min(1, channels[i][offset]))
+        sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF
+        view.setInt16(pos, sample, true)
+        pos += 2
+      }
+      offset++
+    }
+    return new Blob([view], { type: 'audio/wav' })
+  }
+
   const uploadFile = async (file: File) => {
     if (!supabase) {
       setError('Supabase is not configured. Please set up environment variables.')
@@ -431,6 +590,7 @@ export default function AudioUploader({
     setUploading(true)
     setError(null)
     setFileName(file.name)
+    setUploadStage('uploading')
     setProgress({ loaded: 0, total: file.size, percentage: 0 })
 
     try {
@@ -440,22 +600,28 @@ export default function AudioUploader({
         throw new Error('Please sign in to upload files')
       }
 
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('No valid session')
+      }
+
       // Extract audio duration
       const duration = await getAudioDuration(file)
       console.log(`Audio duration: ${duration ? `${Math.floor(duration / 60)}:${String(duration % 60).padStart(2, '0')}` : 'unknown'}`)
 
-      // Create unique file path
+      // Create unique file paths
       const timestamp = Date.now()
       const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_')
       const filePath = `${user.id}/${timestamp}-${sanitizedName}`
+      const analysisFilePath = `${user.id}/${timestamp}-analysis.mp3`
 
-      // 1. Create recording entry in database with 'uploading' status
+      // 1. Create recording entry
       const recordingInsert: RecordingInsert = {
         user_id: user.id,
         file_path: filePath,
         file_name: file.name,
         file_size: file.size,
-        duration: duration, // Save duration!
+        duration: duration,
         status: 'uploading',
       }
 
@@ -471,53 +637,44 @@ export default function AudioUploader({
 
       recordingIdRef.current = newRecording.id
 
-      // 2. Upload file to storage with progress tracking
-      const { data: { session } } = await supabase.auth.getSession()
-      
-      const xhr = new XMLHttpRequest()
-      xhrRef.current = xhr
-      
-      const uploadPromise = new Promise<void>((resolve, reject) => {
-        xhr.upload.addEventListener('progress', (event) => {
-          if (event.lengthComputable) {
-            const percentage = Math.round((event.loaded / event.total) * 100)
-            setProgress({
-              loaded: event.loaded,
-              total: event.total,
-              percentage,
-            })
-          }
-        })
-
-        xhr.addEventListener('load', () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve()
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`))
-          }
-        })
-
-        xhr.addEventListener('error', () => {
-          reject(new Error('Upload failed. Please try again.'))
-        })
-
-        xhr.addEventListener('abort', () => {
-          reject(new Error('Upload cancelled'))
-        })
-
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-        xhr.open('POST', `${supabaseUrl}/storage/v1/object/audio-files/${filePath}`)
-        xhr.setRequestHeader('Authorization', `Bearer ${session?.access_token}`)
-        xhr.setRequestHeader('x-upsert', 'true')
-        xhr.send(file)
+      // 2. Upload ORIGINAL file (for playback) - 0-70% progress
+      console.log('Uploading original file for playback...')
+      setUploadStage('uploading')
+      await uploadToStorage(file, filePath, session.access_token, (pct) => {
+        setProgress({ loaded: 0, total: 100, percentage: Math.round(pct * 0.7) })
       })
 
-      await uploadPromise
+      // 3. Compress and upload ANALYSIS file (for AI) - 70-100% progress
+      console.log('Creating compressed version for AI analysis...')
+      setUploadStage('compressing')
+      setProgress({ loaded: 0, total: 100, percentage: 75 })
+      
+      let finalAnalysisPath: string | null = null
+      const compressedFile = await compressForAnalysis(file)
+      
+      if (compressedFile) {
+        setUploadStage('uploading-analysis')
+        setProgress({ loaded: 0, total: 100, percentage: 85 })
+        try {
+          await uploadToStorage(compressedFile, analysisFilePath, session.access_token)
+          finalAnalysisPath = analysisFilePath
+          console.log(`Analysis file uploaded: ${formatFileSize(compressedFile.size)}`)
+        } catch (err) {
+          console.error('Failed to upload analysis file, AI will use original:', err)
+        }
+      }
 
-      // 3. Update recording status to 'done'
+      setUploadStage('done')
+      setProgress({ loaded: 0, total: 100, percentage: 95 })
+
+      // 4. Update recording with status and analysis path
       const { data: updatedRecording, error: updateError } = await supabase
         .from('recordings')
-        .update({ status: 'done' })
+        .update({ 
+          status: 'done',
+          analysis_file_path: finalAnalysisPath,
+          analysis_file_size: compressedFile?.size || null
+        })
         .eq('id', recordingIdRef.current)
         .select()
         .single()
@@ -526,13 +683,20 @@ export default function AudioUploader({
         throw new Error(`Failed to update recording status: ${updateError.message}`)
       }
 
+      setProgress({ loaded: 100, total: 100, percentage: 100 })
+      
       xhrRef.current = null
       recordingIdRef.current = null
       setUploadedRecording(updatedRecording)
+      setUploadedSizes({
+        original: file.size,
+        compressed: compressedFile?.size || null
+      })
       onUploadComplete?.(updatedRecording)
       
+      toast.success('Upload complete!')
+      
     } catch (err) {
-      // If we created a recording but upload failed, update status to 'error'
       if (recordingIdRef.current && supabase && (err as Error).message !== 'Upload cancelled') {
         await supabase
           .from('recordings')
@@ -686,7 +850,8 @@ export default function AudioUploader({
     return new Blob([arrayBuffer], { type: 'audio/wav' })
   }
 
-  // Handle file selection - check if compression is needed
+  // Handle file selection - just validate and upload
+  // Compression happens silently in uploadFile (dual-file approach)
   const handleFileSelection = async (file: File) => {
     const validationError = validateFile(file)
     if (validationError) {
@@ -695,79 +860,15 @@ export default function AudioUploader({
       return
     }
 
-    // Check if file can be compressed
-    if (!canBeConverted(file)) {
-      // Large WebM/OGG file - can't compress, upload directly
-      const ext = file.name.split('.').pop()?.toLowerCase()
-      toast.warning(`${ext?.toUpperCase()} files over 100 MB cannot be compressed. Uploading original (${formatFileSize(file.size)})...`)
-      await uploadFile(file)
-      return
-    }
-
-    // Check if compression is needed/suggested
-    if (file.size >= COMPRESSION_REQUIRED_THRESHOLD) {
-      // Large file - compression required
-      // Wait for FFmpeg to load if not ready
-      if (!ffmpegLoaded && ffmpegRef.current) {
-        toast.info('Preparing compressor, please wait...')
-      }
-      setPendingFile(file)
-      setCompressionRequired(true)
-      setShowCompressionModal(true)
-    } else if (file.size >= COMPRESSION_SUGGEST_THRESHOLD) {
-      // Medium file - suggest compression (only if FFmpeg is available)
-      if (ffmpegLoaded) {
-        setPendingFile(file)
-        setCompressionRequired(false)
-        setShowCompressionModal(true)
-      } else {
-        // FFmpeg not loaded, upload directly
-        await uploadFile(file)
-      }
-    } else {
-      // Small file - upload directly
-      await uploadFile(file)
-    }
+    // Just upload - compression for AI happens silently in the background
+    await uploadFile(file)
   }
 
-  // Handle compression modal actions
-  const handleCompressAndUpload = async () => {
-    if (!pendingFile) return
-    
-    setShowCompressionModal(false)
-    
-    try {
-      const compressedFile = await compressAudio(pendingFile)
-      await uploadFile(compressedFile)
-    } catch (err) {
-      console.error('Compression failed:', err)
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      
-      // Ask user if they want to upload original instead
-      if (confirm(`Compression failed: ${errorMessage}\n\nWould you like to upload the original file instead?`)) {
-        toast.info('Uploading original file...')
-        await uploadFile(pendingFile)
-      } else {
-        setError(`Compression failed: ${errorMessage}`)
-        toast.error('Compression failed')
-      }
-    } finally {
-      setPendingFile(null)
-    }
-  }
-
-  const handleUploadOriginal = async () => {
-    if (!pendingFile || compressionRequired) return
-    
-    setShowCompressionModal(false)
-    await uploadFile(pendingFile)
-    setPendingFile(null)
-  }
-
-  const handleCancelCompression = () => {
-    setShowCompressionModal(false)
-    setPendingFile(null)
-  }
+  // Legacy compression handlers - no longer needed with dual-file approach
+  // Keeping minimal versions for any remaining references
+  const handleCompressAndUpload = async () => { /* unused */ }
+  const handleUploadOriginal = async () => { /* unused */ }
+  const handleCancelCompression = () => { setShowCompressionModal(false) }
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault()
@@ -803,6 +904,7 @@ export default function AudioUploader({
 
   const resetUploader = () => {
     setUploadedRecording(null)
+    setUploadedSizes({ original: 0, compressed: null })
     setError(null)
     setProgress(null)
     if (fileInputRef.current) {
@@ -810,141 +912,7 @@ export default function AudioUploader({
     }
   }
 
-  // Compression Modal
-  const CompressionModal = () => {
-    if (!showCompressionModal || !pendingFile) return null
-    
-    const estimatedSize = estimateCompressedSize(pendingFile.size)
-    const savingsPercent = Math.round((1 - estimatedSize / pendingFile.size) * 100)
-    
-    return (
-      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto">
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl max-w-md w-full p-6 animate-scale-in my-8">
-          {/* Header */}
-          <div className="flex items-start gap-3 mb-4">
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
-              compressionRequired ? 'bg-amber-500/20' : 'bg-blue-500/20'
-            }`}>
-              <svg className={`w-6 h-6 ${compressionRequired ? 'text-amber-400' : 'text-blue-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-lg font-semibold text-white">
-                {compressionRequired ? '⚠️ Large File Detected' : '💡 Compress for Faster Upload?'}
-              </h3>
-              <p className="text-slate-400 text-sm">
-                {compressionRequired 
-                  ? 'This file must be compressed before upload'
-                  : 'Compression is recommended for better performance'}
-              </p>
-            </div>
-            {/* Close button */}
-            <button
-              onClick={handleCancelCompression}
-              className="p-1 text-slate-400 hover:text-white transition-colors flex-shrink-0"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          
-          {/* File Info */}
-          <div className="bg-slate-900/50 rounded-xl p-4 mb-4">
-            <p className="text-white font-medium truncate mb-3">{pendingFile.name}</p>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-slate-500 mb-1">Original Size</p>
-                <p className="text-white font-medium text-lg">{formatFileSize(pendingFile.size)}</p>
-              </div>
-              <div>
-                <p className="text-slate-500 mb-1">After Compression</p>
-                <p className="text-emerald-400 font-medium text-lg">~{formatFileSize(estimatedSize)}</p>
-              </div>
-            </div>
-            <div className="mt-4 pt-3 border-t border-slate-700">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400 text-sm">Estimated savings</span>
-                <span className="text-emerald-400 font-bold text-lg">{savingsPercent}% smaller</span>
-              </div>
-            </div>
-          </div>
-          
-          {/* Info */}
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 mb-6">
-            <p className="text-blue-300 text-sm">
-              ℹ️ Compression optimizes audio for speech recognition. Quality remains excellent for transcription.
-            </p>
-          </div>
-          
-          {/* Loading FFmpeg indicator */}
-          {!ffmpegLoaded && (
-            <div className="flex items-center justify-center gap-2 mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-              <svg className="animate-spin w-5 h-5 text-amber-400" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              <span className="text-amber-300 text-sm">Loading compression engine...</span>
-            </div>
-          )}
-          
-          {/* Actions */}
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={handleCompressAndUpload}
-              disabled={!ffmpegLoaded}
-              className="w-full px-4 py-3 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white font-medium rounded-xl shadow-lg shadow-emerald-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {ffmpegLoaded ? (
-                <>
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
-                  🗜️ Compress & Upload
-                </>
-              ) : (
-                <>
-                  <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Loading compressor...
-                </>
-              )}
-            </button>
-            
-            <button
-              onClick={() => {
-                setShowCompressionModal(false)
-                uploadFile(pendingFile)
-                setPendingFile(null)
-              }}
-              className={`w-full px-4 py-3 ${compressionRequired ? 'bg-amber-600 hover:bg-amber-500' : 'bg-slate-700 hover:bg-slate-600'} text-white font-medium rounded-xl transition-all flex items-center justify-center gap-2`}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
-              {compressionRequired ? '⚠️ Upload Without Compression' : 'Upload Original'} ({formatFileSize(pendingFile.size)})
-            </button>
-            
-            {compressionRequired && (
-              <p className="text-amber-400/70 text-xs text-center">
-                Warning: Large files may take longer to process
-              </p>
-            )}
-            
-            <button
-              onClick={handleCancelCompression}
-              className="w-full px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  // CompressionModal removed - compression now happens silently in uploadFile
 
   // Compression Progress UI
   const CompressionProgress = () => {
@@ -993,6 +961,10 @@ export default function AudioUploader({
   }
 
   if (uploadedRecording) {
+    const savings = uploadedSizes.compressed 
+      ? Math.round((1 - uploadedSizes.compressed / uploadedSizes.original) * 100)
+      : 0
+    
     return (
       <div className="w-full animate-fade-in">
         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-6">
@@ -1005,8 +977,26 @@ export default function AudioUploader({
             <div className="flex-1 min-w-0">
               <h3 className="text-lg font-semibold text-white truncate">{uploadedRecording.file_name}</h3>
               <p className="text-slate-400 text-sm mt-1">
-                {formatFileSize(uploadedRecording.file_size)} • Uploaded successfully
+                Uploaded successfully
               </p>
+              {/* File sizes info */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+                <span className="text-slate-500 flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m2.828-9.9a9 9 0 012.728-2.728" />
+                  </svg>
+                  Playback: {formatFileSize(uploadedSizes.original)}
+                </span>
+                {uploadedSizes.compressed && (
+                  <span className="text-purple-400 flex items-center gap-1">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                    AI: {formatFileSize(uploadedSizes.compressed)} 
+                    <span className="text-emerald-400">(-{savings}%)</span>
+                  </span>
+                )}
+              </div>
             </div>
             <button
               onClick={resetUploader}
@@ -1051,29 +1041,72 @@ export default function AudioUploader({
 
           {uploading && progress ? (
             <div className="space-y-4">
-              <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/20 flex items-center justify-center animate-pulse-glow">
-                <svg className="w-8 h-8 text-amber-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
+              <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center animate-pulse-glow ${
+                uploadStage === 'compressing' ? 'bg-purple-500/20' : 'bg-amber-500/20'
+              }`}>
+                {uploadStage === 'compressing' ? (
+                  <svg className="w-8 h-8 text-purple-400 animate-spin" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                ) : (
+                  <svg className="w-8 h-8 text-amber-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                )}
               </div>
               <div>
-                <p className="text-white font-medium">Uploading...</p>
+                <p className="text-white font-medium">
+                  {uploadStage === 'uploading' && 'Uploading...'}
+                  {uploadStage === 'compressing' && 'Optimizing for AI...'}
+                  {uploadStage === 'uploading-analysis' && 'Saving optimized version...'}
+                  {uploadStage === 'done' && 'Finishing...'}
+                </p>
                 <p className="text-slate-400 text-sm mt-1 truncate max-w-xs mx-auto">
                   {fileName}
                 </p>
-                <p className="text-slate-500 text-xs mt-1">
-                  {formatFileSize(progress.loaded)} / {formatFileSize(progress.total)}
-                </p>
               </div>
+              
+              {/* Progress bar */}
               <div className="w-full max-w-xs mx-auto">
                 <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-300"
+                    className={`h-full transition-all duration-300 ${
+                      uploadStage === 'compressing' 
+                        ? 'bg-gradient-to-r from-purple-500 to-indigo-500' 
+                        : 'bg-gradient-to-r from-amber-500 to-orange-500'
+                    }`}
                     style={{ width: `${progress.percentage}%` }}
                   />
                 </div>
-                <p className="text-amber-400 text-sm mt-2 font-medium">{progress.percentage}%</p>
+                <p className={`text-sm mt-2 font-medium ${
+                  uploadStage === 'compressing' ? 'text-purple-400' : 'text-amber-400'
+                }`}>{progress.percentage}%</p>
               </div>
+              
+              {/* Stage indicators */}
+              <div className="flex items-center justify-center gap-2 text-xs">
+                <span className={`flex items-center gap-1 ${uploadStage === 'uploading' ? 'text-amber-400' : 'text-slate-500'}`}>
+                  {uploadStage === 'uploading' ? '●' : '✓'} Upload
+                </span>
+                <span className="text-slate-600">→</span>
+                <span className={`flex items-center gap-1 ${
+                  uploadStage === 'compressing' ? 'text-purple-400' : 
+                  uploadStage === 'uploading-analysis' || uploadStage === 'done' ? 'text-slate-500' : 'text-slate-600'
+                }`}>
+                  {uploadStage === 'compressing' ? '●' : 
+                   uploadStage === 'uploading-analysis' || uploadStage === 'done' ? '✓' : '○'} Optimize
+                </span>
+                <span className="text-slate-600">→</span>
+                <span className={`flex items-center gap-1 ${
+                  uploadStage === 'uploading-analysis' ? 'text-amber-400' : 
+                  uploadStage === 'done' ? 'text-slate-500' : 'text-slate-600'
+                }`}>
+                  {uploadStage === 'uploading-analysis' ? '●' : 
+                   uploadStage === 'done' ? '✓' : '○'} Save
+                </span>
+              </div>
+              
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -1132,8 +1165,7 @@ export default function AudioUploader({
         )}
       </div>
       
-      {/* Modals - rendered via portal to body */}
-      {mounted && createPortal(<CompressionModal />, document.body)}
+      {/* Compression progress - rendered via portal to body */}
       {mounted && createPortal(<CompressionProgress />, document.body)}
     </>
   )

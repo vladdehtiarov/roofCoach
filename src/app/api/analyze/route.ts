@@ -80,6 +80,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'Recording not found' }, { status: 404 })
     }
 
+    // Use compressed analysis file if available (much smaller, saves RAM!)
+    const analysisFilePath = recording.analysis_file_path || filePath
+    if (recording.analysis_file_path) {
+      console.log(`Using compressed analysis file: ${recording.analysis_file_path}`)
+    } else {
+      console.log(`No analysis file, using original: ${filePath}`)
+    }
+
     // Check queue - limit concurrent analyses to prevent memory overload
     // Only count analyses started in the last 30 minutes (ignore stuck ones)
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
@@ -184,7 +192,7 @@ export async function POST(request: Request) {
       geminiApiKey,
       analysisId: analysis.id,
       recordingId,
-      filePath,
+      filePath: analysisFilePath, // Use compressed version if available!
       totalChunks,
       totalSeconds, // Pass exact duration in seconds
       userId: user.id, // Pass user ID for token tracking

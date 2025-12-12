@@ -16,6 +16,8 @@ export interface Recording {
   id: string
   user_id: string
   file_path: string
+  analysis_file_path: string | null // Compressed version for AI analysis
+  analysis_file_size: number | null // Size of compressed file in bytes
   file_name: string
   file_size: number
   duration: number | null
@@ -185,6 +187,7 @@ export interface ProfileInsert {
 export interface RecordingInsert {
   user_id: string
   file_path: string
+  analysis_file_path?: string | null
   file_name: string
   file_size: number
   duration?: number | null

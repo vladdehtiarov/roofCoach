@@ -4,10 +4,14 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/Toast'
 import { Recording } from '@/types/database'
+import { FFmpeg } from '@ffmpeg/ffmpeg'
+import { fetchFile } from '@ffmpeg/util'
 
 interface AudioRecorderProps {
   onRecordingComplete?: (recording: Recording) => void
 }
+
+type UploadStage = 'idle' | 'uploading' | 'compressing' | 'uploading-analysis' | 'done'
 
 export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProps) {
   const [isRecording, setIsRecording] = useState(false)
@@ -17,7 +21,12 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadStage, setUploadStage] = useState<UploadStage>('idle')
   const [permissionState, setPermissionState] = useState<'prompt' | 'granted' | 'denied'>('prompt')
+  
+  // FFmpeg for compression
+  const [ffmpegLoaded, setFfmpegLoaded] = useState(false)
+  const ffmpegRef = useRef<FFmpeg | null>(null)
   const [recordingName, setRecordingName] = useState('')
   const [audioLevel, setAudioLevel] = useState(0) // 0-1 scale for audio visualization
   const [frequencyBands, setFrequencyBands] = useState<number[]>(new Array(16).fill(0)) // For EQ visualization
@@ -54,6 +63,23 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
       }
     }
   }, [])
+
+  // Load FFmpeg for compression
+  useEffect(() => {
+    const loadFFmpeg = async () => {
+      if (ffmpegLoaded || ffmpegRef.current) return
+      try {
+        const ffmpeg = new FFmpeg()
+        await ffmpeg.load()
+        ffmpegRef.current = ffmpeg
+        setFfmpegLoaded(true)
+        console.log('FFmpeg loaded for recorder')
+      } catch (err) {
+        console.error('Failed to load FFmpeg:', err)
+      }
+    }
+    loadFFmpeg()
+  }, [ffmpegLoaded])
 
   // Audio level analysis functions
   const startAudioAnalysis = useCallback((stream: MediaStream) => {
@@ -274,11 +300,90 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
     chunksRef.current = []
   }
 
+  // Compress audio for AI analysis - same settings as AudioUploader
+  // Target: minimum size that AI can still transcribe (8kbps @ 8kHz)
+  const compressForAnalysis = async (blob: Blob): Promise<Blob | null> => {
+    if (!ffmpegRef.current || !ffmpegLoaded) {
+      console.log('FFmpeg not loaded, skipping compression')
+      return null
+    }
+
+    try {
+      const ffmpeg = ffmpegRef.current
+      const inputFileName = 'input.webm'
+      const outputFileName = 'output.mp3'
+
+      // Calculate optimal bitrate based on recording duration
+      // Same logic as AudioUploader for consistency
+      const TARGET_SIZE = 12 * 1024 * 1024 // 12MB target
+      const estimatedDuration = recordingTime // Already in seconds
+      const targetBits = TARGET_SIZE * 8
+      const optimalBitrate = Math.floor(targetBits / Math.max(estimatedDuration, 60)) // Assume at least 1 min
+
+      // Same bitrate tiers as AudioUploader
+      let bitrate: string
+      let sampleRate: string
+      
+      if (optimalBitrate >= 24000) {
+        bitrate = '24k'
+        sampleRate = '12000'
+      } else if (optimalBitrate >= 16000) {
+        bitrate = '16k'
+        sampleRate = '8000'
+      } else if (optimalBitrate >= 12000) {
+        bitrate = '12k'
+        sampleRate = '8000'
+      } else {
+        // Very long recordings - absolute minimum
+        bitrate = '8k'
+        sampleRate = '8000'
+      }
+
+      console.log(`[Recorder compression] Starting: ${(blob.size / 1024 / 1024).toFixed(2)} MB, duration: ${recordingTime}s, bitrate: ${bitrate}`)
+
+      await ffmpeg.writeFile(inputFileName, await fetchFile(blob))
+      
+      await ffmpeg.exec([
+        '-i', inputFileName,
+        '-vn',
+        '-ac', '1',
+        '-ar', sampleRate,
+        '-b:a', bitrate,
+        '-y',
+        outputFileName
+      ])
+
+      const data = await ffmpeg.readFile(outputFileName)
+      
+      // Cleanup
+      try {
+        await ffmpeg.deleteFile(inputFileName)
+        await ffmpeg.deleteFile(outputFileName)
+      } catch { /* ignore */ }
+
+      const compressedBlob = new Blob([new Uint8Array(data as Uint8Array)], { type: 'audio/mpeg' })
+      console.log(`[Recorder compression] Result: ${(compressedBlob.size / 1024 / 1024).toFixed(2)} MB`)
+      return compressedBlob
+    } catch (err) {
+      console.error('Compression failed:', err)
+      return null
+    }
+  }
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes'
+    const k = 1024
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
   const uploadRecording = async () => {
     if (!audioBlob) return
 
     setIsUploading(true)
     setUploadProgress(0)
+    setUploadStage('uploading')
 
     try {
       const supabase = createClient()
@@ -295,15 +400,15 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
       if (mimeType.includes('mp4')) extension = 'm4a'
       else if (mimeType.includes('mp3') || mimeType.includes('mpeg')) extension = 'mp3'
       
-      // Create file name
+      // Create file paths
       const timestamp = Date.now()
       const safeName = recordingName.replace(/[^a-zA-Z0-9\s]/g, '').trim() || 'recording'
       const fileName = `${safeName.replace(/\s+/g, '_')}_${timestamp}.${extension}`
       const filePath = `${user.id}/${fileName}`
+      const analysisFilePath = `${user.id}/${timestamp}-analysis.mp3`
 
-      setUploadProgress(20)
-
-      // Upload to Supabase Storage
+      // 1. Upload ORIGINAL file (for playback) - 0-50%
+      setUploadProgress(10)
       const { error: uploadError } = await supabase.storage
         .from('audio-files')
         .upload(filePath, audioBlob, {
@@ -312,15 +417,45 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
         })
 
       if (uploadError) throw uploadError
+      setUploadProgress(50)
 
-      setUploadProgress(60)
+      // 2. Compress and upload ANALYSIS file (for AI) - 50-90%
+      setUploadStage('compressing')
+      setUploadProgress(55)
+      
+      let finalAnalysisPath: string | null = null
+      let analysisFileSize: number | null = null
+      const compressedBlob = await compressForAnalysis(audioBlob)
+      
+      if (compressedBlob) {
+        setUploadStage('uploading-analysis')
+        setUploadProgress(70)
+        
+        const { error: analysisUploadError } = await supabase.storage
+          .from('audio-files')
+          .upload(analysisFilePath, compressedBlob, {
+            contentType: 'audio/mpeg',
+            cacheControl: '3600',
+          })
 
-      // Create recording entry in database
+        if (!analysisUploadError) {
+          finalAnalysisPath = analysisFilePath
+          analysisFileSize = compressedBlob.size
+          console.log(`Analysis file uploaded: ${formatFileSize(compressedBlob.size)}`)
+        }
+      }
+
+      setUploadProgress(85)
+      setUploadStage('done')
+
+      // 3. Create recording entry in database
       const { data: recording, error: dbError } = await supabase
         .from('recordings')
         .insert({
           user_id: user.id,
           file_path: filePath,
+          analysis_file_path: finalAnalysisPath,
+          analysis_file_size: analysisFileSize,
           file_name: recordingName || 'Untitled Recording',
           file_size: audioBlob.size,
           duration: recordingTime,
@@ -333,7 +468,10 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
 
       setUploadProgress(100)
 
-      toast.success('Recording uploaded successfully!')
+      const compressionInfo = finalAnalysisPath 
+        ? ` (AI: ${formatFileSize(analysisFileSize || 0)})`
+        : ''
+      toast.success(`Recording saved!${compressionInfo}`)
       
       // Notify parent component
       if (onRecordingComplete && recording) {
@@ -349,6 +487,7 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
     } finally {
       setIsUploading(false)
       setUploadProgress(0)
+      setUploadStage('idle')
     }
   }
 
@@ -408,14 +547,47 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
           {isUploading && (
             <div className="mb-4">
               <div className="flex items-center justify-between text-sm mb-2">
-                <span className="text-slate-400">Uploading...</span>
-                <span className="text-amber-400">{uploadProgress}%</span>
+                <span className={uploadStage === 'compressing' ? 'text-purple-400' : 'text-slate-400'}>
+                  {uploadStage === 'uploading' && 'Uploading...'}
+                  {uploadStage === 'compressing' && 'Optimizing for AI...'}
+                  {uploadStage === 'uploading-analysis' && 'Saving optimized version...'}
+                  {uploadStage === 'done' && 'Finishing...'}
+                </span>
+                <span className={uploadStage === 'compressing' ? 'text-purple-400' : 'text-amber-400'}>
+                  {uploadProgress}%
+                </span>
               </div>
               <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-300"
+                  className={`h-full transition-all duration-300 ${
+                    uploadStage === 'compressing' 
+                      ? 'bg-gradient-to-r from-purple-500 to-indigo-500'
+                      : 'bg-gradient-to-r from-amber-500 to-orange-500'
+                  }`}
                   style={{ width: `${uploadProgress}%` }}
                 />
+              </div>
+              {/* Stage indicators */}
+              <div className="flex items-center justify-center gap-2 text-xs mt-2">
+                <span className={`${uploadStage === 'uploading' ? 'text-amber-400' : 'text-slate-500'}`}>
+                  {uploadStage === 'uploading' ? '●' : '✓'} Upload
+                </span>
+                <span className="text-slate-600">→</span>
+                <span className={`${
+                  uploadStage === 'compressing' ? 'text-purple-400' : 
+                  ['uploading-analysis', 'done'].includes(uploadStage) ? 'text-slate-500' : 'text-slate-600'
+                }`}>
+                  {uploadStage === 'compressing' ? '●' : 
+                   ['uploading-analysis', 'done'].includes(uploadStage) ? '✓' : '○'} Optimize
+                </span>
+                <span className="text-slate-600">→</span>
+                <span className={`${
+                  uploadStage === 'uploading-analysis' ? 'text-amber-400' : 
+                  uploadStage === 'done' ? 'text-slate-500' : 'text-slate-600'
+                }`}>
+                  {uploadStage === 'uploading-analysis' ? '●' : 
+                   uploadStage === 'done' ? '✓' : '○'} Save
+                </span>
               </div>
             </div>
           )}
