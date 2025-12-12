@@ -30,7 +30,7 @@ const GEMINI_PRICING: Record<string, { input: number; output: number }> = {
 // ============================================================================
 // SALES COACHING PROMPT
 // ============================================================================
-const SALES_ANALYSIS_PROMPT = `You are an expert sales coach analyzing a sales call recording. 
+const SALES_ANALYSIS_PROMPT = `You are an expert sales coach analyzing a roofing sales call recording.
 Analyze this audio and provide a comprehensive sales coaching analysis.
 
 IMPORTANT: Include specific timestamps [HH:MM:SS] for EVERY insight so the user can jump to that moment.
@@ -122,8 +122,88 @@ Return your analysis as a valid JSON object with this EXACT structure:
     "title": "Call title based on content",
     "customer_name": "Name if mentioned",
     "rep_name": "Name if mentioned",
+    "company_name": "Company name if mentioned",
     "call_outcome": "won|lost|pending|follow_up",
     "key_topics": ["topic1", "topic2"]
+  },
+  
+  "comprehensive_report": {
+    "header": {
+      "client_name": "Customer name",
+      "rep_name": "Sales rep name",
+      "company_name": "Company name"
+    },
+    "overall_performance": {
+      "total_score": <0-100>,
+      "max_score": 100,
+      "rating": "Starter|Playmaker|Closer|Elite",
+      "summary": "2-3 sentence executive summary of the call performance"
+    },
+    "phases": {
+      "why": {
+        "name": "WHY",
+        "max_score": 38,
+        "score": <0-38>,
+        "checkpoints": [
+          {"name": "Sitdown / Transition", "score": <0-5>, "max": 5, "justification": "Detailed explanation..."},
+          {"name": "Rapport Building – FORM Method", "score": <0-5>, "max": 5, "justification": "Detailed explanation with examples from call..."},
+          {"name": "Assessment Questions (Q1–Q16)", "score": <0-12>, "max": 12, "justification": "List which questions asked/missed..."},
+          {"name": "Inspection", "score": <0-3>, "max": 3, "justification": "..."},
+          {"name": "Present Findings", "score": <0-5>, "max": 5, "justification": "..."},
+          {"name": "Tie-Down WHY & Repair vs. Replace", "score": <0-8>, "max": 8, "justification": "..."}
+        ]
+      },
+      "what": {
+        "name": "WHAT",
+        "max_score": 27,
+        "score": <0-27>,
+        "checkpoints": [
+          {"name": "Formal Presentation System", "score": <0-5>, "max": 5, "justification": "..."},
+          {"name": "System Options – FBAL Method", "score": <0-12>, "max": 12, "justification": "Feature/Benefit/Advantage/Limitation analysis..."},
+          {"name": "Backup Recommendations/Visuals", "score": <0-5>, "max": 5, "justification": "..."},
+          {"name": "Tie-Down WHAT", "score": <0-5>, "max": 5, "justification": "..."}
+        ]
+      },
+      "who": {
+        "name": "WHO",
+        "max_score": 25,
+        "score": <0-25>,
+        "checkpoints": [
+          {"name": "Company Advantages", "score": <0-8>, "max": 8, "justification": "..."},
+          {"name": "Pyramid of Pain", "score": <0-8>, "max": 8, "justification": "Risk stories and solutions..."},
+          {"name": "WHO Tie-Down", "score": <0-9>, "max": 9, "justification": "Pre-price qualification questions..."}
+        ]
+      },
+      "when": {
+        "name": "WHEN",
+        "max_score": 10,
+        "score": <0-10>,
+        "checkpoints": [
+          {"name": "Price Presentation", "score": <0-5>, "max": 5, "justification": "..."},
+          {"name": "Post-Close Silence", "score": <0-5>, "max": 5, "justification": "Did rep stay silent after price?"}
+        ]
+      }
+    },
+    "what_done_right": [
+      "Bullet point of something done well with specific examples from the call"
+    ],
+    "areas_for_improvement": [
+      {"area": "Area name", "recommendation": "Specific actionable advice with script example"}
+    ],
+    "weakest_elements": [
+      "Most critical issue that needs immediate attention"
+    ],
+    "coaching_recommendations": [
+      {"topic": "Topic name", "advice": "Detailed coaching advice with specific scripts and techniques"}
+    ],
+    "rank_assessment": {
+      "current_rank": "Starter|Playmaker|Closer|Elite",
+      "next_level": "Next rank name",
+      "requirements": ["What needs to improve to reach next level"]
+    },
+    "quick_wins": [
+      {"change": "Specific easy change", "impact": "Worth up to X points"}
+    ]
   }
 }
 
@@ -424,6 +504,7 @@ async function processAnalysis(params: {
       customer_analysis: analysisResult.customer_analysis || null,
       speaker_analytics: analysisResult.speaker_analytics || null,
       re_engage: analysisResult.re_engage || null,
+      comprehensive_report: analysisResult.comprehensive_report || null,
       
       // Legacy fields
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

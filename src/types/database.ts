@@ -197,6 +197,51 @@ export interface ReEngage {
   suggested_message: string
 }
 
+// Comprehensive Report (WHY/WHAT/WHO/WHEN phases)
+export interface ReportCheckpoint {
+  name: string
+  score: number
+  max: number
+  justification: string
+}
+
+export interface ReportPhase {
+  name: string
+  max_score: number
+  score: number
+  checkpoints: ReportCheckpoint[]
+}
+
+export interface ComprehensiveReport {
+  header: {
+    client_name: string
+    rep_name: string
+    company_name: string
+  }
+  overall_performance: {
+    total_score: number
+    max_score: number
+    rating: string
+    summary: string
+  }
+  phases: {
+    why: ReportPhase
+    what: ReportPhase
+    who: ReportPhase
+    when: ReportPhase
+  }
+  what_done_right: string[]
+  areas_for_improvement: { area: string; recommendation: string }[]
+  weakest_elements: string[]
+  coaching_recommendations: { topic: string; advice: string }[]
+  rank_assessment: {
+    current_rank: string
+    next_level: string
+    requirements: string[]
+  }
+  quick_wins: { change: string; impact: string }[]
+}
+
 export interface TranscriptEntry {
   speaker: 'Rep' | 'Customer' | string
   text: string
@@ -251,6 +296,7 @@ export interface AudioAnalysis {
   customer_analysis: CustomerAnalysis | null
   speaker_analytics: SpeakerAnalytics | null
   re_engage: ReEngage | null
+  comprehensive_report: ComprehensiveReport | null
   
   // Metadata
   duration_analyzed: number | null

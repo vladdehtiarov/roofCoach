@@ -17,6 +17,7 @@ const SpeakerAnalytics = dynamic(() => import('@/components/sales/SpeakerAnalyti
 const ReEngagePanel = dynamic(() => import('@/components/sales/ReEngagePanel'))
 const TranscriptPanel = dynamic(() => import('@/components/sales/TranscriptPanel'))
 const CustomAudioPlayer = dynamic(() => import('@/components/CustomAudioPlayer'))
+const ExportReportButton = dynamic(() => import('@/components/ExportReportButton'))
 
 interface Props {
   recording: Recording
@@ -304,6 +305,14 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
                   </svg>
                   Analyzing...
                 </span>
+              )}
+
+              {/* Export Report Button */}
+              {analysis?.comprehensive_report && (
+                <ExportReportButton 
+                  report={analysis.comprehensive_report}
+                  fileName={`${recording.file_name.replace(/\.[^/.]+$/, '')}_report`}
+                />
               )}
 
               <button className="p-2 text-slate-400 hover:text-white transition-colors">
