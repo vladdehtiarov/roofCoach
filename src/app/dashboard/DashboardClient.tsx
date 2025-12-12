@@ -18,7 +18,7 @@ import { Recording, RecordingWithTranscript, Tag, Folder } from '@/types/databas
 interface RecordingWithUrl extends RecordingWithTranscript {
   audioUrl?: string
   tags?: Tag[]
-  analysis_status?: 'pending' | 'processing' | 'done' | 'error' | null
+  analysis_status?: 'pending' | 'processing' | 'done' | 'error' | 'queued' | null
 }
 
 type FilterType = 'active' | 'archived' | 'all'
@@ -212,11 +212,31 @@ export default function DashboardClient({ user }: { user: User }) {
         (analysesData || []).map(a => [a.recording_id, a.processing_status])
       )
 
+      // Fetch tags for all recordings
+      const { data: recordingTagsData } = await supabase
+        .from('recording_tags')
+        .select('recording_id, tags(*)')
+        .in('recording_id', (data || []).map(r => r.id))
+
+      // Group tags by recording_id
+      const tagsMap = new Map<string, Tag[]>()
+      if (recordingTagsData) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        recordingTagsData.forEach((rt: any) => {
+          if (rt.tags) {
+            const existing = tagsMap.get(rt.recording_id) || []
+            existing.push(rt.tags as Tag)
+            tagsMap.set(rt.recording_id, existing)
+          }
+        })
+      }
+
       const recordingsWithUrls = await Promise.all(
         (data || []).map(async (recording) => {
           const audioUrl = await getSignedUrl(recording.file_path)
           const analysis_status = analysisMap.get(recording.id) as RecordingWithUrl['analysis_status'] || null
-          return { ...recording, audioUrl, analysis_status }
+          const tags = tagsMap.get(recording.id) || []
+          return { ...recording, audioUrl, analysis_status, tags }
         })
       )
       
@@ -635,6 +655,15 @@ export default function DashboardClient({ user }: { user: User }) {
       return (
         <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-400 animate-pulse">
           🔄 Analyzing...
+        </span>
+      )
+    }
+    
+    // Queued for analysis
+    if (analysis_status === 'pending' || analysis_status === 'queued') {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400">
+          ⏳ In Queue
         </span>
       )
     }
@@ -1147,7 +1176,8 @@ export default function DashboardClient({ user }: { user: User }) {
                 {paginatedRecordings.map((recording) => (
                   <div
                     key={recording.id}
-                    className={`bg-slate-800/50 backdrop-blur-sm rounded-xl border transition-all ${
+                    onClick={() => router.push(`/dashboard/recordings/${recording.id}`)}
+                    className={`bg-slate-800/50 backdrop-blur-sm rounded-xl border transition-all cursor-pointer ${
                       selectedIds.has(recording.id) 
                         ? 'border-amber-500/50 bg-amber-500/5' 
                         : 'border-slate-700/50 hover:border-amber-500/30 hover:bg-slate-800/70'
@@ -1157,7 +1187,7 @@ export default function DashboardClient({ user }: { user: User }) {
                       <div className="flex items-center gap-4">
                         {/* Selection checkbox */}
                         <button
-                          onClick={() => toggleSelection(recording.id)}
+                          onClick={(e) => { e.stopPropagation(); toggleSelection(recording.id); }}
                           className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
                             selectedIds.has(recording.id)
                               ? 'bg-amber-500 border-amber-500'
@@ -1173,7 +1203,7 @@ export default function DashboardClient({ user }: { user: User }) {
                         
                         <div 
                           className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center cursor-pointer hover:from-amber-500/30 hover:to-orange-500/30 transition-colors"
-                          onClick={() => setExpandedPlayer(expandedPlayer === recording.id ? null : recording.id)}
+                          onClick={(e) => { e.stopPropagation(); setExpandedPlayer(expandedPlayer === recording.id ? null : recording.id); }}
                           title={expandedPlayer === recording.id ? 'Hide player' : 'Show player'}
                         >
                           {expandedPlayer === recording.id ? (
@@ -1196,14 +1226,15 @@ export default function DashboardClient({ user }: { user: User }) {
                                 onChange={(e) => setEditingName(e.target.value)}
                                 onKeyDown={(e) => handleRenameKeyDown(e, recording.id)}
                                 onBlur={() => handleRename(recording.id)}
+                                onClick={(e) => e.stopPropagation()}
                                 autoFocus
                                 className="max-w-[200px] px-2 py-1 text-white font-medium bg-slate-700/50 border border-amber-500/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/50"
                                 disabled={isSavingName}
                               />
                             ) : (
-                              <Link href={`/dashboard/recordings/${recording.id}`} className="truncate max-w-[50%]">
+                              <span className="truncate max-w-[50%]">
                                 <h3 className="text-white font-medium truncate hover:text-amber-400 transition-colors">{recording.file_name}</h3>
-                              </Link>
+                              </span>
                             )}
                             {editingId !== recording.id && (
                               <button
@@ -1224,13 +1255,33 @@ export default function DashboardClient({ user }: { user: User }) {
                             )}
                             {getStatusBadge(recording)}
                           </div>
-                          <Link href={`/dashboard/recordings/${recording.id}`}>
-                            <p className="text-slate-400 text-sm hover:text-slate-300 transition-colors">
-                              {formatFileSize(recording.file_size)} 
-                              {recording.duration && ` • ${formatDuration(recording.duration)}`}
-                              {' • '}{formatDate(recording.created_at)}
-                            </p>
-                          </Link>
+                          {/* Tags */}
+                          {recording.tags && recording.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {recording.tags.slice(0, 3).map(tag => (
+                                <span
+                                  key={tag.id}
+                                  className="px-1.5 py-0.5 text-[10px] font-medium rounded"
+                                  style={{ 
+                                    backgroundColor: `${tag.color}20`, 
+                                    color: tag.color 
+                                  }}
+                                >
+                                  {tag.name}
+                                </span>
+                              ))}
+                              {recording.tags.length > 3 && (
+                                <span className="px-1.5 py-0.5 text-[10px] text-slate-500">
+                                  +{recording.tags.length - 3}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <p className="text-slate-400 text-sm">
+                            {formatFileSize(recording.file_size)} 
+                            {recording.duration && ` • ${formatDuration(recording.duration)}`}
+                            {' • '}{formatDate(recording.created_at)}
+                          </p>
                         </div>
                         <div className="flex items-center gap-1">
                           {recording.audioUrl && (
@@ -1247,7 +1298,7 @@ export default function DashboardClient({ user }: { user: User }) {
                             </a>
                           )}
                           <button
-                            onClick={() => handleArchiveRecording(recording, !recording.is_archived)}
+                            onClick={(e) => { e.stopPropagation(); handleArchiveRecording(recording, !recording.is_archived); }}
                             className={`p-2 transition-colors ${
                               recording.is_archived
                                 ? 'text-emerald-400 hover:text-emerald-300'
@@ -1260,7 +1311,7 @@ export default function DashboardClient({ user }: { user: User }) {
                             </svg>
                           </button>
                           <button
-                            onClick={() => openDeleteModal(recording)}
+                            onClick={(e) => { e.stopPropagation(); openDeleteModal(recording); }}
                             className="p-2 text-slate-400 hover:text-red-400 transition-colors"
                             title="Delete"
                           >
@@ -1268,21 +1319,21 @@ export default function DashboardClient({ user }: { user: User }) {
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                             </svg>
                           </button>
-                          <Link
-                            href={`/dashboard/recordings/${recording.id}`}
+                          <span
+                            onClick={(e) => e.stopPropagation()}
                             className="p-2 text-slate-500 hover:text-amber-400 transition-colors"
                           >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                             </svg>
-                          </Link>
+                          </span>
                         </div>
                       </div>
                     </div>
                     
                     {/* Expandable Audio Player */}
                     {expandedPlayer === recording.id && recording.audioUrl && recording.status === 'done' && !recording.is_archived && (
-                      <div className="px-4 pb-4 animate-fade-in">
+                      <div className="px-4 pb-4 animate-fade-in" onClick={(e) => e.stopPropagation()}>
                         <audio
                           controls
                           className="w-full h-12 rounded-lg"

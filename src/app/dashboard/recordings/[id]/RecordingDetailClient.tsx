@@ -12,6 +12,7 @@ import AudioEditor from '@/components/AudioEditor'
 import AnalysisDisplay from '@/components/AnalysisDisplay'
 import TagManager from '@/components/TagManager'
 import BookmarkManager from '@/components/BookmarkManager'
+import CommentsManager from '@/components/CommentsManager'
 import ExportButton from '@/components/ExportButton'
 import { User } from '@supabase/supabase-js'
 import { Recording, Transcript, AudioAnalysis, Tag } from '@/types/database'
@@ -67,6 +68,10 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
   
   // Editor
   const [showEditor, setShowEditor] = useState(false)
+  
+  // Tab navigation
+  type TabType = 'overview' | 'analysis' | 'edit'
+  const [activeTab, setActiveTab] = useState<TabType>('analysis')
   
   const router = useRouter()
   const toast = useToast()
@@ -686,257 +691,303 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
               >
                 Your browser does not support the audio element.
               </audio>
-              
-              {/* Bookmarks */}
-              <div className="mt-4">
-                <BookmarkManager
-                  recordingId={recording.id}
-                  userId={user.id}
-                  currentTime={currentTime}
-                  onSeek={(seconds) => {
-                    if (audioRef.current) {
-                      audioRef.current.currentTime = seconds
-                      audioRef.current.play()
-                    }
-                  }}
-                />
-              </div>
             </div>
           )}
 
-          {/* Action Buttons */}
-          <div className="flex flex-wrap gap-3">
-            {audioUrl && (
-              <>
-                <a
-                  href={audioUrl}
-                  download={recording.file_name}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download Audio
-                </a>
-                
-                <button
-                  onClick={() => setShowEditor(true)}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
-                  </svg>
-                  Edit Audio
-                </button>
-              </>
-            )}
-            
-            {/* Start Analysis - when no analysis exists */}
-            {!analysis && currentStatus === 'done' && !isAnalyzing && (
-              <button
-                onClick={handleStartAnalysis}
-                disabled={isAnalyzing}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-medium rounded-lg shadow-lg shadow-purple-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                </svg>
-                🤖 Start AI Analysis
-              </button>
-            )}
-
-            {/* Retry Analysis - when error occurred */}
-            {(currentStatus === 'error' || analysisError || analysis?.processing_status === 'error') && !isAnalyzing && (
-              <button
-                onClick={handleStartAnalysis}
-                disabled={isAnalyzing}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white font-medium rounded-lg shadow-lg shadow-red-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                🔄 Retry Analysis
-              </button>
-            )}
-
-            {/* Re-analyze - when analysis exists and completed */}
-            {analysis && analysis.processing_status === 'done' && !isAnalyzing && (
-              <button
-                onClick={handleStartAnalysis}
-                disabled={isAnalyzing}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Run analysis again with fresh results"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                Re-analyze
-              </button>
-            )}
-
-            {/* Analyzing in progress */}
-            {isAnalyzing && (
-              <div className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg">
-                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Analyzing with AI...
-              </div>
-            )}
-
-            {/* Processing status indicator */}
-            {(currentStatus === 'processing' || analysisProgress.status === 'processing') && !isAnalyzing && (
-              <div className="inline-flex items-center gap-3 px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg">
-                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span>
-                  {analysisProgress.totalChunks > 0 
-                    ? `Chunk ${analysisProgress.completedChunks + 1}/${analysisProgress.totalChunks}`
-                    : 'Starting...'}
-                </span>
-              </div>
-            )}
+          {/* Tab Navigation */}
+          <div className="flex gap-1 p-1 bg-slate-900/50 rounded-xl mb-4">
+            <button
+              onClick={() => setActiveTab('overview')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'overview'
+                  ? 'bg-slate-700 text-white shadow-lg'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+              Overview
+            </button>
+            <button
+              onClick={() => setActiveTab('analysis')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'analysis'
+                  ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-500/25'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              AI Analysis
+              {analysis?.processing_status === 'done' && (
+                <span className="w-2 h-2 bg-emerald-400 rounded-full" />
+              )}
+              {(analysisProgress.status === 'processing' || isAnalyzing) && (
+                <span className="w-2 h-2 bg-purple-400 rounded-full animate-pulse" />
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab('edit')}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                activeTab === 'edit'
+                  ? 'bg-slate-700 text-white shadow-lg'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
+              </svg>
+              Edit
+            </button>
           </div>
-
-          {analysisError && (
-            <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
-              <p className="text-red-400 text-sm">{analysisError}</p>
-            </div>
-          )}
         </div>
 
-        {/* Analysis Section */}
-        {analysis && analysis.processing_status === 'done' ? (
-          <AnalysisDisplay analysis={analysis} onSeek={seekToTimestamp} />
-        ) : analysisProgress.status === 'queued' ? (
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
-            <div className="text-center py-8">
-              {/* Queue Status */}
-              <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center mb-6">
-                <svg className="w-10 h-10 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+        {/* Tab Content */}
+        <div className="mt-6">
+          {/* OVERVIEW TAB */}
+          {activeTab === 'overview' && (
+            <div className="space-y-6">
+              {/* Quick Actions */}
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-4">
+                <div className="flex flex-wrap gap-3">
+                  {audioUrl && (
+                    <a
+                      href={audioUrl}
+                      download={recording.file_name}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download
+                    </a>
+                  )}
+                  
+                  <button
+                    onClick={() => router.push(`/dashboard/recordings/${recording.id}?delete=true`)}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-red-600/80 text-slate-300 hover:text-white rounded-lg transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Delete
+                  </button>
+                </div>
               </div>
-              <h3 className="text-lg font-medium text-white mb-2">⏳ Waiting in queue...</h3>
-              <p className="text-slate-400 mb-6">{analysisProgress.message || 'Server is busy. Your analysis will start automatically soon.'}</p>
-              
-              <div className="max-w-md mx-auto">
-                <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-                  <div className="flex items-center gap-3">
-                    <div className="flex-shrink-0">
-                      <svg className="animate-spin w-5 h-5 text-amber-400" viewBox="0 0 24 24">
+
+              {/* Bookmarks */}
+              <BookmarkManager
+                recordingId={recording.id}
+                userId={user.id}
+                currentTime={currentTime}
+                onSeek={(seconds) => {
+                  if (audioRef.current) {
+                    audioRef.current.currentTime = seconds
+                    audioRef.current.play()
+                  }
+                }}
+              />
+
+              {/* Comments */}
+              <CommentsManager
+                recordingId={recording.id}
+                userId={user.id}
+                currentTime={currentTime}
+                onSeek={(seconds) => {
+                  if (audioRef.current) {
+                    audioRef.current.currentTime = seconds
+                    audioRef.current.play()
+                  }
+                }}
+              />
+            </div>
+          )}
+
+          {/* ANALYSIS TAB */}
+          {activeTab === 'analysis' && (
+            <div className="space-y-6">
+              {/* Analysis Actions */}
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Start Analysis - when no analysis exists or not pending */}
+                  {(!analysis || analysis.processing_status === 'pending') && currentStatus === 'done' && !isAnalyzing && (
+                    analysis?.processing_status === 'pending' ? (
+                      <span className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/20 text-blue-400 rounded-lg">
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        ⏳ In Queue
+                      </span>
+                    ) : (
+                      <button
+                        onClick={handleStartAnalysis}
+                        disabled={isAnalyzing}
+                        className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-medium rounded-xl shadow-lg shadow-purple-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        🤖 Start AI Analysis
+                      </button>
+                    )
+                  )}
+
+                  {/* Retry Analysis - when error occurred */}
+                  {(currentStatus === 'error' || analysisError || analysis?.processing_status === 'error') && !isAnalyzing && (
+                    <button
+                      onClick={handleStartAnalysis}
+                      disabled={isAnalyzing}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white font-medium rounded-lg shadow-lg shadow-red-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      🔄 Retry Analysis
+                    </button>
+                  )}
+
+                  {/* Re-analyze - when analysis exists and completed */}
+                  {analysis && analysis.processing_status === 'done' && !isAnalyzing && (
+                    <button
+                      onClick={handleStartAnalysis}
+                      disabled={isAnalyzing}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Run analysis again with fresh results"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Re-analyze
+                    </button>
+                  )}
+
+                  {/* Analyzing in progress */}
+                  {isAnalyzing && (
+                    <div className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg">
+                      <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Analyzing with AI...
+                    </div>
+                  )}
+
+                  {/* Processing status indicator */}
+                  {(currentStatus === 'processing' || analysisProgress.status === 'processing') && !isAnalyzing && (
+                    <div className="inline-flex items-center gap-3 px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg">
+                      <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      <span>
+                        {analysisProgress.totalChunks > 0 
+                          ? `Chunk ${analysisProgress.completedChunks + 1}/${analysisProgress.totalChunks}`
+                          : 'Starting...'}
+                      </span>
+                    </div>
+                  )}
+
+                  {analysisError && (
+                    <p className="text-red-400 text-sm">{analysisError}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Analysis Content */}
+              {analysis && analysis.processing_status === 'done' ? (
+                <AnalysisDisplay analysis={analysis} onSeek={seekToTimestamp} />
+              ) : analysisProgress.status === 'queued' ? (
+                <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-6">
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center mb-4">
+                      <span className="text-3xl">⏳</span>
+                    </div>
+                    <h3 className="text-lg font-medium text-white mb-2">Waiting in queue...</h3>
+                    <p className="text-slate-400 text-sm">{analysisProgress.message || 'Will start automatically when server is free.'}</p>
+                  </div>
+                </div>
+              ) : (currentStatus === 'processing' || analysisProgress.status === 'processing' || (analysis && analysis.processing_status === 'processing')) ? (
+                <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-6">
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-purple-500/20 to-indigo-500/20 flex items-center justify-center mb-4">
+                      <svg className="animate-spin w-8 h-8 text-purple-400" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
                     </div>
-                    <div className="text-left">
-                      <p className="text-amber-400 font-medium text-sm">Auto-retry enabled</p>
-                      <p className="text-slate-400 text-xs">Will start automatically when server is free</p>
+                    <h3 className="text-lg font-medium text-white mb-2">🤖 Analyzing...</h3>
+                    <p className="text-slate-400 text-sm mb-4">{analysisProgress.message || 'Processing...'}</p>
+                    {analysisProgress.totalChunks > 0 && (
+                      <div className="max-w-xs mx-auto">
+                        <div className="flex justify-between text-xs text-slate-400 mb-1">
+                          <span>Progress</span>
+                          <span>{analysisProgress.completedChunks}/{analysisProgress.totalChunks}</span>
+                        </div>
+                        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all"
+                            style={{ width: `${(analysisProgress.completedChunks / analysisProgress.totalChunks) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : analysis?.processing_status === 'pending' ? (
+                <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-blue-500/30 p-6">
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-blue-500/20 to-cyan-500/20 flex items-center justify-center mb-4 animate-pulse">
+                      <span className="text-3xl">⏳</span>
+                    </div>
+                    <h3 className="text-lg font-medium text-white mb-2">In Queue</h3>
+                    <p className="text-slate-400 text-sm">Will start automatically when server is free.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-6">
+                  <div className="text-center py-8">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-purple-500/10 to-indigo-500/10 flex items-center justify-center mb-4">
+                      <svg className="w-8 h-8 text-purple-400/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-medium text-white mb-2">Ready for AI Analysis</h3>
+                    <p className="text-slate-400 text-sm mb-4">Click the button above to unlock powerful insights</p>
+                    <div className="flex flex-wrap justify-center gap-2 text-xs">
+                      <span className="px-2 py-1 bg-slate-700/50 rounded">📝 Transcript</span>
+                      <span className="px-2 py-1 bg-slate-700/50 rounded">⏱️ Timeline</span>
+                      <span className="px-2 py-1 bg-slate-700/50 rounded">📖 Glossary</span>
+                      <span className="px-2 py-1 bg-slate-700/50 rounded">💡 Insights</span>
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
-        ) : (currentStatus === 'processing' || analysisProgress.status === 'processing' || (analysis && analysis.processing_status === 'processing')) ? (
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
-            <div className="text-center py-8">
-              {/* Progress Header */}
-              <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-purple-500/20 to-indigo-500/20 flex items-center justify-center mb-6 animate-pulse-glow">
-                <svg className="animate-spin w-10 h-10 text-purple-400" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium text-white mb-2">🤖 AI is analyzing your recording...</h3>
-              <p className="text-slate-400 mb-6">{analysisProgress.message || 'Processing...'}</p>
-              
-              {/* Progress Bar */}
-              {analysisProgress.totalChunks > 0 && (
-                <div className="max-w-md mx-auto mb-6">
-                  <div className="flex justify-between text-sm text-slate-400 mb-2">
-                    <span>Progress</span>
-                    <span>{analysisProgress.completedChunks}/{analysisProgress.totalChunks} chunks</span>
-                  </div>
-                  <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-500 ease-out"
-                      style={{ width: `${(analysisProgress.completedChunks / analysisProgress.totalChunks) * 100}%` }}
-                    />
-                  </div>
-                  <p className="text-slate-500 text-xs mt-2">
-                    ~{Math.ceil((analysisProgress.totalChunks - analysisProgress.completedChunks) * 1.5)} minutes remaining
-                  </p>
-                </div>
               )}
-              
-              {/* Show sections as they load */}
-              {analysis && (analysis.sections as unknown[])?.length > 0 && (
-                <div className="mt-6 text-left max-w-2xl mx-auto">
-                  <h4 className="text-sm font-medium text-slate-300 mb-3">✅ Completed sections:</h4>
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {(analysis.sections as { timestamp_start: string; title: string; summary: string }[]).map((section, i) => (
-                      <div key={i} className="p-3 bg-slate-700/50 rounded-lg border border-slate-600/50">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs font-mono text-purple-400">{section.timestamp_start}</span>
-                          <span className="text-sm font-medium text-white">{section.title}</span>
-                        </div>
-                        <p className="text-xs text-slate-400 line-clamp-2">{section.summary}</p>
-                      </div>
-                    ))}
+            </div>
+          )}
+
+          {/* EDIT TAB */}
+          {activeTab === 'edit' && (
+            <div className="space-y-6">
+              {audioUrl ? (
+                <AudioEditor
+                  audioUrl={audioUrl}
+                  fileName={recording.file_name}
+                  onSave={handleSaveEditedAudio}
+                  onCancel={() => setActiveTab('overview')}
+                />
+              ) : (
+                <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-6">
+                  <div className="text-center py-8">
+                    <p className="text-slate-400">Loading audio...</p>
                   </div>
                 </div>
               )}
             </div>
-          </div>
-        ) : (
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
-            <div className="text-center py-12">
-              <div className="w-24 h-24 mx-auto rounded-full bg-gradient-to-br from-purple-500/10 to-indigo-500/10 flex items-center justify-center mb-6">
-                <svg className="w-12 h-12 text-purple-400/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                </svg>
-              </div>
-              <h3 className="text-xl font-medium text-white mb-3">Ready for AI Analysis</h3>
-              <p className="text-slate-400 max-w-md mx-auto mb-6">
-                Click &quot;Start AI Analysis&quot; to unlock powerful insights from your recording:
-              </p>
-              <div className="grid sm:grid-cols-2 gap-3 max-w-lg mx-auto text-left mb-6">
-                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
-                  <span className="text-lg">📝</span>
-                  <div>
-                    <div className="text-sm font-medium text-white">Full Transcript</div>
-                    <div className="text-xs text-slate-400">Word-for-word transcription</div>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
-                  <span className="text-lg">⏱️</span>
-                  <div>
-                    <div className="text-sm font-medium text-white">Timeline</div>
-                    <div className="text-xs text-slate-400">Topics by timestamp</div>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
-                  <span className="text-lg">📖</span>
-                  <div>
-                    <div className="text-sm font-medium text-white">Glossary</div>
-                    <div className="text-xs text-slate-400">Technical terms explained</div>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
-                  <span className="text-lg">💡</span>
-                  <div>
-                    <div className="text-sm font-medium text-white">Coaching Tips</div>
-                    <div className="text-xs text-slate-400">AI-powered insights</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Technical Details (Collapsible) */}
         <div className="mt-6">
@@ -983,19 +1034,6 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
         loading={isDeleting}
       />
 
-      {/* Audio Editor Modal */}
-      {showEditor && audioUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/90 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto">
-            <AudioEditor
-              audioUrl={audioUrl}
-              fileName={recording.file_name}
-              onSave={handleSaveEditedAudio}
-              onCancel={() => setShowEditor(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

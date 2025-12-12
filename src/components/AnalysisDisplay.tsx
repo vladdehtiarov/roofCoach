@@ -285,19 +285,22 @@ export default function AnalysisDisplay({ analysis, onSeek }: AnalysisDisplayPro
                         : 'bg-slate-800 border-slate-600'
                     }`} />
                     
-                    <button
-                      onClick={() => setExpandedTimeline(expandedTimeline === index ? null : index)}
-                      className={`w-full text-left p-4 rounded-xl transition-all ${
+                    <div
+                      className={`w-full text-left p-4 rounded-xl transition-all cursor-pointer ${
                         expandedTimeline === index
                           ? 'bg-slate-700/70 border border-purple-500/30'
                           : 'bg-slate-800/50 hover:bg-slate-700/50 border border-transparent'
                       }`}
+                      onClick={() => setExpandedTimeline(expandedTimeline === index ? null : index)}
                     >
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 mb-1">
                             <button
-                              onClick={() => onSeek?.(segment.start_time)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onSeek?.(segment.start_time)
+                              }}
                               className="text-sm font-mono text-purple-400 hover:text-purple-300 hover:underline cursor-pointer transition-colors"
                               title="Click to play from this point"
                             >
@@ -336,7 +339,7 @@ export default function AnalysisDisplay({ analysis, onSeek }: AnalysisDisplayPro
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                         </svg>
                       </div>
-                    </button>
+                    </div>
                   </div>
                 ))}
               </div>

@@ -1148,7 +1148,7 @@ export default function AudioUploader({
                 </p>
               </div>
               <div className="text-slate-500 text-xs space-y-1">
-                <p>Supports: MP3, WAV, OGG, FLAC, M4A, AAC, WebM</p>
+                <p>Supports: MP3, WAV, M4A, FLAC, AAC</p>
                 <p>Max size: {formatFileSize(MAX_FILE_SIZE)}</p>
                 {ffmpegLoaded && (
                   <p className="text-emerald-400">✓ Smart compression available for large files</p>

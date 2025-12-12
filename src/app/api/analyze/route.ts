@@ -100,24 +100,59 @@ export async function POST(request: Request) {
       .order('created_at', { ascending: true })
 
     if (!queueError && activeAnalyses && activeAnalyses.length >= MAX_CONCURRENT_ANALYSES) {
-      // Check if this recording is already in queue
-      const isAlreadyProcessing = activeAnalyses.some(a => a.recording_id === recordingId)
-      if (isAlreadyProcessing) {
-        return NextResponse.json({ message: 'Analysis already in progress' }, { status: 400 })
+      // Check if this recording is already in queue or processing
+      const existingForRecording = activeAnalyses.find(a => a.recording_id === recordingId)
+      if (existingForRecording) {
+        return NextResponse.json({ message: 'Analysis already in progress or queued' }, { status: 400 })
       }
+
+      // Check for existing pending analysis
+      const { data: pendingAnalysis } = await supabase
+        .from('audio_analyses')
+        .select('id')
+        .eq('recording_id', recordingId)
+        .eq('processing_status', 'pending')
+        .single()
+
+      if (pendingAnalysis) {
+        return NextResponse.json({ message: 'Already in queue' }, { status: 400 })
+      }
+
+      // Create a pending analysis record so it shows in queue
+      await supabase.from('audio_analyses').insert({
+        recording_id: recordingId,
+        processing_status: 'pending',
+        transcript: '',
+        sections: [],
+        timeline: [],
+        main_topics: [],
+        glossary: [],
+        insights: [],
+        title: 'Queued for analysis...',
+        summary: '',
+        conclusion: '',
+        total_chunks: 0,
+        completed_chunks: 0,
+        current_chunk_message: 'Waiting in queue...',
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        model_used: '',
+        estimated_cost_usd: 0,
+      })
 
       // Calculate queue position
       const queuePosition = activeAnalyses.length - MAX_CONCURRENT_ANALYSES + 1
-      console.log(`Queue full (${activeAnalyses.length}/${MAX_CONCURRENT_ANALYSES}). Recording ${recordingId} must wait.`)
+      console.log(`Queue full (${activeAnalyses.length}/${MAX_CONCURRENT_ANALYSES}). Recording ${recordingId} added to queue.`)
       
       return NextResponse.json({ 
-        message: 'Server is busy processing other files. Please try again in a few minutes.',
+        message: 'Added to queue. Analysis will start automatically when server is free.',
         queued: true,
         queuePosition: queuePosition + 1,
         activeCount: activeAnalyses.length,
         maxConcurrent: MAX_CONCURRENT_ANALYSES,
         retryAfterSeconds: 60
-      }, { status: 503 })
+      }, { status: 202 }) // 202 Accepted - queued for processing
     }
 
     // Check for existing analysis
@@ -127,11 +162,18 @@ export async function POST(request: Request) {
       .eq('recording_id', recordingId)
       .single()
 
+    let analysisId: string | null = null
+    
     if (existingAnalysis) {
       if (existingAnalysis.processing_status === 'processing') {
         return NextResponse.json({ message: 'Analysis already in progress' }, { status: 400 })
       }
-      await supabase.from('audio_analyses').delete().eq('id', existingAnalysis.id)
+      // If pending (from queue), we'll update it; if done/error, delete and recreate
+      if (existingAnalysis.processing_status === 'pending') {
+        analysisId = existingAnalysis.id
+      } else {
+        await supabase.from('audio_analyses').delete().eq('id', existingAnalysis.id)
+      }
     }
 
     // Calculate chunks based on duration or file size
@@ -155,31 +197,61 @@ export async function POST(request: Request) {
     console.log(`Duration: ${Math.floor(totalMinutes)}:${String(Math.round(totalMinutes % 1 * 60)).padStart(2, '0')} (${durationSource})`)
     console.log(`Chunks: ${totalChunks} x ${CHUNK_DURATION_MINUTES} min`)
 
-    // Create analysis record
-    const { data: analysis, error: createError } = await supabase
-      .from('audio_analyses')
-      .insert({
-        recording_id: recordingId,
-        transcript: '',
-        title: 'Processing...',
-        summary: '',
-        timeline: [],
-        main_topics: [],
-        glossary: [],
-        insights: [],
-        conclusion: '',
-        sections: [],
-        processing_status: 'processing',
-        total_chunks: totalChunks,
-        completed_chunks: 0,
-        current_chunk_message: 'Downloading audio...',
-        language: 'en',
-        confidence_score: 0,
-      })
-      .select()
-      .single()
+    // Create or update analysis record
+    let analysis: { id: string } | null = null
+    
+    if (analysisId) {
+      // Update existing pending analysis
+      const { data, error } = await supabase
+        .from('audio_analyses')
+        .update({
+          title: 'Processing...',
+          processing_status: 'processing',
+          total_chunks: totalChunks,
+          completed_chunks: 0,
+          current_chunk_message: 'Downloading audio...',
+        })
+        .eq('id', analysisId)
+        .select()
+        .single()
+      
+      if (error) {
+        console.error('Failed to update pending analysis:', error)
+        return NextResponse.json({ message: 'Failed to start analysis' }, { status: 500 })
+      }
+      analysis = data
+    } else {
+      // Create new analysis record
+      const { data, error: createError } = await supabase
+        .from('audio_analyses')
+        .insert({
+          recording_id: recordingId,
+          transcript: '',
+          title: 'Processing...',
+          summary: '',
+          timeline: [],
+          main_topics: [],
+          glossary: [],
+          insights: [],
+          conclusion: '',
+          sections: [],
+          processing_status: 'processing',
+          total_chunks: totalChunks,
+          completed_chunks: 0,
+          current_chunk_message: 'Downloading audio...',
+          language: 'en',
+          confidence_score: 0,
+        })
+        .select()
+        .single()
 
-    if (createError || !analysis) {
+      if (createError || !data) {
+        return NextResponse.json({ message: 'Failed to create analysis' }, { status: 500 })
+      }
+      analysis = data
+    }
+
+    if (!analysis) {
       return NextResponse.json({ message: 'Failed to create analysis' }, { status: 500 })
     }
 
@@ -603,6 +675,9 @@ Make it engaging, informative, and well-structured. Use actual content and quote
     console.log(`📊 Total tokens: ${totalTokensUsed} (in: ${totalInputTokens}, out: ${totalOutputTokens})`)
     console.log(`💰 Estimated cost: $${estimatedCost.toFixed(4)}`)
 
+    // Check for pending analyses in queue and trigger next one
+    await triggerNextPendingAnalysis(supabase)
+
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error)
     console.error('Processing error:', errMsg)
@@ -716,6 +791,51 @@ async function updateProgress(
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// Trigger the next pending analysis in queue
+async function triggerNextPendingAnalysis(supabase: Awaited<ReturnType<typeof createClient>>) {
+  if (!supabase) return
+  
+  try {
+    // Find the oldest pending analysis
+    const { data: pendingAnalysis, error } = await supabase
+      .from('audio_analyses')
+      .select('id, recording_id')
+      .eq('processing_status', 'pending')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .single()
+
+    if (error || !pendingAnalysis) {
+      console.log('📭 No pending analyses in queue')
+      return
+    }
+
+    console.log(`🚀 Triggering next pending analysis for recording: ${pendingAnalysis.recording_id}`)
+    
+    // Update status to processing
+    await supabase
+      .from('audio_analyses')
+      .update({ 
+        processing_status: 'processing',
+        current_chunk_message: 'Starting analysis...',
+      })
+      .eq('id', pendingAnalysis.id)
+
+    // Trigger the analysis via internal call (fire and forget)
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL || 'http://localhost:3000'
+    fetch(`${baseUrl}/api/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recordingId: pendingAnalysis.recording_id }),
+    }).catch(err => {
+      console.error('Failed to trigger pending analysis:', err)
+    })
+
+  } catch (err) {
+    console.error('Error triggering next pending analysis:', err)
+  }
 }
 
 // GET endpoint to check status
