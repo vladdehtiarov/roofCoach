@@ -18,7 +18,8 @@ interface RecordingWithUrl extends RecordingWithTranscript {
 }
 
 type FilterType = 'active' | 'archived' | 'all'
-type SortType = 'newest' | 'oldest' | 'name' | 'size'
+type AnalysisFilter = 'all' | 'analyzed' | 'not_analyzed'
+type SortType = 'newest' | 'oldest' | 'name' | 'size' | 'duration' | 'analyzed_first'
 type InputMode = 'upload' | 'record'
 
 const ITEMS_PER_PAGE = 10
@@ -27,6 +28,7 @@ export default function DashboardClient({ user }: { user: User }) {
   const [recordings, setRecordings] = useState<RecordingWithUrl[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<FilterType>('active')
+  const [analysisFilter, setAnalysisFilter] = useState<AnalysisFilter>('all')
   const [sortBy, setSortBy] = useState<SortType>('newest')
   const [searchQuery, setSearchQuery] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
@@ -40,6 +42,11 @@ export default function DashboardClient({ user }: { user: User }) {
     recording: null,
   })
   const [isDeleting, setIsDeleting] = useState(false)
+  
+  // Rename state
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
+  const [isSavingName, setIsSavingName] = useState(false)
 
   const router = useRouter()
   const toast = useToast()
@@ -60,7 +67,7 @@ export default function DashboardClient({ user }: { user: User }) {
   // Reset page when filter or search changes
   useEffect(() => {
     setCurrentPage(1)
-  }, [filter, searchQuery, sortBy])
+  }, [filter, analysisFilter, searchQuery, sortBy])
 
   const checkAdminStatus = async () => {
     if (!supabase) return
@@ -131,12 +138,20 @@ export default function DashboardClient({ user }: { user: User }) {
   const processedRecordings = useMemo(() => {
     let result = [...recordings]
 
+    // Analysis filter
+    if (analysisFilter === 'analyzed') {
+      result = result.filter(r => r.has_analysis)
+    } else if (analysisFilter === 'not_analyzed') {
+      result = result.filter(r => !r.has_analysis)
+    }
+
     // Search filter
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase()
       result = result.filter(r => 
         r.file_name.toLowerCase().includes(query) ||
-        r.transcript_text?.toLowerCase().includes(query)
+        r.transcript_text?.toLowerCase().includes(query) ||
+        r.analysis_title?.toLowerCase().includes(query)
       )
     }
 
@@ -154,10 +169,21 @@ export default function DashboardClient({ user }: { user: User }) {
       case 'size':
         result.sort((a, b) => b.file_size - a.file_size)
         break
+      case 'duration':
+        result.sort((a, b) => (b.duration || 0) - (a.duration || 0))
+        break
+      case 'analyzed_first':
+        result.sort((a, b) => {
+          if (a.has_analysis === b.has_analysis) {
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          }
+          return a.has_analysis ? -1 : 1
+        })
+        break
     }
 
     return result
-  }, [recordings, searchQuery, sortBy])
+  }, [recordings, analysisFilter, searchQuery, sortBy])
 
   // Pagination
   const totalPages = Math.ceil(processedRecordings.length / ITEMS_PER_PAGE)
@@ -181,6 +207,8 @@ export default function DashboardClient({ user }: { user: User }) {
       ...recording,
       has_transcript: false,
       transcript_text: null,
+      has_analysis: false,
+      analysis_title: null,
       audioUrl,
     }
     setRecordings((prev) => [recordingWithUrl, ...prev])
@@ -248,6 +276,58 @@ export default function DashboardClient({ user }: { user: User }) {
     } catch (err) {
       console.error('Error archiving recording:', err)
       toast.error('Failed to update recording')
+    }
+  }
+
+  const startRename = (recording: RecordingWithUrl) => {
+    setEditingId(recording.id)
+    setEditingName(recording.file_name)
+  }
+
+  const cancelRename = () => {
+    setEditingId(null)
+    setEditingName('')
+  }
+
+  const handleRename = async (recordingId: string) => {
+    if (!supabase || !editingName.trim()) {
+      cancelRename()
+      return
+    }
+
+    const recording = recordings.find(r => r.id === recordingId)
+    if (!recording || editingName.trim() === recording.file_name) {
+      cancelRename()
+      return
+    }
+
+    setIsSavingName(true)
+    try {
+      const { error } = await supabase
+        .from('recordings')
+        .update({ file_name: editingName.trim() })
+        .eq('id', recordingId)
+
+      if (error) throw error
+
+      setRecordings((prev) =>
+        prev.map((r) => (r.id === recordingId ? { ...r, file_name: editingName.trim() } : r))
+      )
+      toast.success('Recording renamed')
+      cancelRename()
+    } catch (err) {
+      console.error('Error renaming recording:', err)
+      toast.error('Failed to rename recording')
+    } finally {
+      setIsSavingName(false)
+    }
+  }
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent, recordingId: string) => {
+    if (e.key === 'Enter') {
+      handleRename(recordingId)
+    } else if (e.key === 'Escape') {
+      cancelRename()
     }
   }
 
@@ -423,34 +503,90 @@ export default function DashboardClient({ user }: { user: User }) {
         {/* Recordings Section */}
         <div>
           {/* Header with filters */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col gap-4 mb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <h2 className="text-xl font-semibold text-white">Your Recordings</h2>
-              <div className="flex items-center gap-1">
+              <button
+                onClick={loadRecordings}
+                className="p-2 text-slate-400 hover:text-white transition-colors self-end sm:self-auto"
+                title="Refresh"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* Filter Pills */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Status Filter */}
+              <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-lg">
                 {(['active', 'archived', 'all'] as const).map((f) => (
                   <button
                     key={f}
                     onClick={() => setFilter(f)}
-                    className={`px-3 py-1 text-sm rounded-lg transition-colors ${
+                    className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
                       filter === f
-                        ? 'bg-slate-700 text-white'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                        ? 'bg-slate-700 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
                     }`}
                   >
                     {f.charAt(0).toUpperCase() + f.slice(1)}
                   </button>
                 ))}
               </div>
+
+              {/* Divider */}
+              <div className="h-6 w-px bg-slate-700 hidden sm:block" />
+              
+              {/* Analysis Filter */}
+              <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-lg">
+                <button
+                  onClick={() => setAnalysisFilter('all')}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                    analysisFilter === 'all'
+                      ? 'bg-slate-700 text-white shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  onClick={() => setAnalysisFilter('analyzed')}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5 ${
+                    analysisFilter === 'analyzed'
+                      ? 'bg-emerald-500/20 text-emerald-400 shadow'
+                      : 'text-slate-400 hover:text-emerald-400'
+                  }`}
+                >
+                  <span>✨</span>
+                  Analyzed
+                </button>
+                <button
+                  onClick={() => setAnalysisFilter('not_analyzed')}
+                  className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                    analysisFilter === 'not_analyzed'
+                      ? 'bg-amber-500/20 text-amber-400 shadow'
+                      : 'text-slate-400 hover:text-amber-400'
+                  }`}
+                >
+                  Not analyzed
+                </button>
+              </div>
+
+              {/* Active filters indicator */}
+              {(filter !== 'active' || analysisFilter !== 'all') && (
+                <button
+                  onClick={() => { setFilter('active'); setAnalysisFilter('all'); }}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Clear filters
+                </button>
+              )}
             </div>
-            <button
-              onClick={loadRecordings}
-              className="p-2 text-slate-400 hover:text-white transition-colors self-end sm:self-auto"
-              title="Refresh"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
           </div>
 
           {/* Search and Sort */}
@@ -491,15 +627,19 @@ export default function DashboardClient({ user }: { user: User }) {
                 <option value="oldest">Oldest first</option>
                 <option value="name">Name A-Z</option>
                 <option value="size">Largest first</option>
+                <option value="duration">Longest first</option>
+                <option value="analyzed_first">✨ Analyzed first</option>
               </select>
             </div>
           </div>
 
           {/* Results count */}
-          {searchQuery && (
+          {(searchQuery || analysisFilter !== 'all') && (
             <p className="text-slate-400 text-sm mb-4">
               Found {processedRecordings.length} recording{processedRecordings.length !== 1 ? 's' : ''}
               {searchQuery && ` matching "${searchQuery}"`}
+              {analysisFilter === 'analyzed' && ' (analyzed)'}
+              {analysisFilter === 'not_analyzed' && ' (not analyzed)'}
             </p>
           )}
 
@@ -558,22 +698,61 @@ export default function DashboardClient({ user }: { user: User }) {
                             </svg>
                           )}
                         </div>
-                        <Link href={`/dashboard/recordings/${recording.id}`} className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <h3 className="text-white font-medium truncate hover:text-amber-400 transition-colors">{recording.file_name}</h3>
+                            {editingId === recording.id ? (
+                              <input
+                                type="text"
+                                value={editingName}
+                                onChange={(e) => setEditingName(e.target.value)}
+                                onKeyDown={(e) => handleRenameKeyDown(e, recording.id)}
+                                onBlur={() => handleRename(recording.id)}
+                                autoFocus
+                                className="max-w-[200px] px-2 py-1 text-white font-medium bg-slate-700/50 border border-amber-500/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                                disabled={isSavingName}
+                              />
+                            ) : (
+                              <Link href={`/dashboard/recordings/${recording.id}`} className="truncate max-w-[50%]">
+                                <h3 className="text-white font-medium truncate hover:text-amber-400 transition-colors">{recording.file_name}</h3>
+                              </Link>
+                            )}
+                            {editingId !== recording.id && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); startRename(recording); }}
+                                className="p-1 text-slate-500 hover:text-amber-400 transition-all rounded hover:bg-slate-700/50 flex-shrink-0"
+                                title="Rename"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                </svg>
+                              </button>
+                            )}
+                            {isSavingName && editingId === recording.id && (
+                              <svg className="animate-spin w-4 h-4 text-amber-400 flex-shrink-0" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                              </svg>
+                            )}
                             {getStatusBadge(recording.status, recording.is_archived)}
-                            {recording.has_transcript && (
+                            {recording.has_analysis && (
+                              <span className="px-2 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400">
+                                ✨ Analyzed
+                              </span>
+                            )}
+                            {recording.has_transcript && !recording.has_analysis && (
                               <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400">
                                 Transcribed
                               </span>
                             )}
                           </div>
-                          <p className="text-slate-400 text-sm">
-                            {formatFileSize(recording.file_size)} 
-                            {recording.duration && ` • ${formatDuration(recording.duration)}`}
-                            {' • '}{formatDate(recording.created_at)}
-                          </p>
-                        </Link>
+                          <Link href={`/dashboard/recordings/${recording.id}`}>
+                            <p className="text-slate-400 text-sm hover:text-slate-300 transition-colors">
+                              {formatFileSize(recording.file_size)} 
+                              {recording.duration && ` • ${formatDuration(recording.duration)}`}
+                              {' • '}{formatDate(recording.created_at)}
+                            </p>
+                          </Link>
+                        </div>
                         <div className="flex items-center gap-1">
                           {recording.audioUrl && (
                             <a

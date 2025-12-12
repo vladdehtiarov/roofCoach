@@ -20,6 +20,37 @@ interface UserStats {
   total_storage_used: number
 }
 
+interface UserTokenStats {
+  user_id: string
+  user_email: string
+  total_analyses: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  estimated_cost_usd: number
+  models_used: string[]
+  last_analysis_at: string | null
+}
+
+interface PlatformTokenStats {
+  total_users: number
+  total_analyses: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  total_estimated_cost_usd: number
+  avg_tokens_per_analysis: number
+  most_used_model: string | null
+  analyses_today: number
+  tokens_today: number
+}
+
+interface DailyUsage {
+  date: string
+  tokens: number
+  analyses: number
+}
+
 interface RecordingWithUser {
   id: string
   user_id: string
@@ -37,7 +68,8 @@ interface RecordingWithUser {
   user_role: string
 }
 
-type Tab = 'users' | 'recordings'
+type Tab = 'users' | 'recordings' | 'usage'
+type TimeRange = 'today' | 'week' | 'month' | 'year'
 
 export default function AdminDashboard({ user }: { user: User }) {
   const [activeTab, setActiveTab] = useState<Tab>('users')
@@ -46,6 +78,14 @@ export default function AdminDashboard({ user }: { user: User }) {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'active' | 'archived'>('active')
   const [searchQuery, setSearchQuery] = useState('')
+  
+  // Token usage stats
+  const [platformStats, setPlatformStats] = useState<PlatformTokenStats | null>(null)
+  const [userTokenStats, setUserTokenStats] = useState<UserTokenStats[]>([])
+  const [dailyUsage, setDailyUsage] = useState<DailyUsage[]>([])
+  const [modelDistribution, setModelDistribution] = useState<Record<string, number>>({})
+  const [usageLoading, setUsageLoading] = useState(false)
+  const [chartTimeRange, setChartTimeRange] = useState<TimeRange>('month')
   
   // Role change modal
   const [roleModal, setRoleModal] = useState<{ isOpen: boolean; user: UserStats | null; newRole: string }>({
@@ -69,11 +109,32 @@ export default function AdminDashboard({ user }: { user: User }) {
   useEffect(() => {
     if (activeTab === 'users') {
       loadUsers()
-    } else {
+    } else if (activeTab === 'recordings') {
       loadRecordings()
+    } else if (activeTab === 'usage') {
+      loadTokenStats(chartTimeRange)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, filter])
+  }, [activeTab, filter, chartTimeRange])
+
+  const loadTokenStats = async (range: TimeRange) => {
+    setUsageLoading(true)
+    try {
+      const response = await fetch(`/api/admin/token-stats?range=${range}`)
+      if (!response.ok) throw new Error('Failed to load token stats')
+      const data = await response.json()
+      
+      setPlatformStats(data.platform)
+      setUserTokenStats(data.users || [])
+      setDailyUsage(data.dailyUsage || [])
+      setModelDistribution(data.modelDistribution || {})
+    } catch (err) {
+      console.error('Error loading token stats:', err)
+      toast.error('Failed to load usage statistics')
+    } finally {
+      setUsageLoading(false)
+    }
+  }
 
   const loadUsers = async () => {
     if (!supabase) return
@@ -155,10 +216,12 @@ export default function AdminDashboard({ user }: { user: User }) {
       if (error) throw error
       toast.success(`User role changed to ${roleModal.newRole}`)
       closeRoleModal()
+      // Reload to update the UI with new role
       loadUsers()
     } catch (err) {
       console.error('Error changing role:', err)
       toast.error('Failed to change user role')
+      closeRoleModal()
     } finally {
       setIsChangingRole(false)
     }
@@ -200,6 +263,16 @@ export default function AdminDashboard({ user }: { user: User }) {
     const sizes = ['B', 'KB', 'MB', 'GB']
     const i = Math.floor(Math.log(bytes) / Math.log(k))
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
+  const formatNumber = (num: number): string => {
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M'
+    if (num >= 1_000) return (num / 1_000).toFixed(1) + 'K'
+    return num.toString()
+  }
+
+  const formatCost = (cost: number): string => {
+    return '$' + cost.toFixed(4)
   }
 
   const formatDate = (dateString: string): string => {
@@ -339,6 +412,19 @@ export default function AdminDashboard({ user }: { user: User }) {
           >
             Recordings
           </button>
+          <button
+            onClick={() => { setActiveTab('usage'); setSearchQuery(''); }}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+              activeTab === 'usage'
+                ? 'bg-purple-500/20 text-purple-400'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            AI Usage
+          </button>
         </div>
 
         {/* Search */}
@@ -387,7 +473,276 @@ export default function AdminDashboard({ user }: { user: User }) {
         )}
 
         {/* Content */}
-        {loading ? (
+        {activeTab === 'usage' ? (
+          usageLoading ? (
+            <div className="space-y-4">
+              <div className="grid sm:grid-cols-4 gap-4">
+                {[1, 2, 3, 4].map(i => (
+                  <div key={i} className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4 animate-pulse">
+                    <div className="h-4 bg-slate-700 rounded w-24 mb-2" />
+                    <div className="h-8 bg-slate-700 rounded w-16" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Platform Stats Cards */}
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-gradient-to-br from-purple-500/10 to-indigo-500/10 rounded-xl border border-purple-500/20 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-sm">Total Tokens</p>
+                      <p className="text-2xl font-bold text-white">{formatNumber(platformStats?.total_tokens || 0)}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gradient-to-br from-emerald-500/10 to-green-500/10 rounded-xl border border-emerald-500/20 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-sm">Estimated Cost</p>
+                      <p className="text-2xl font-bold text-white">{formatCost(platformStats?.total_estimated_cost_usd || 0)}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gradient-to-br from-amber-500/10 to-orange-500/10 rounded-xl border border-amber-500/20 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-sm">Total Analyses</p>
+                      <p className="text-2xl font-bold text-white">{platformStats?.total_analyses || 0}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 rounded-xl border border-blue-500/20 p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 text-sm">Today</p>
+                      <p className="text-2xl font-bold text-white">{formatNumber(platformStats?.tokens_today || 0)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Input/Output Token Breakdown */}
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-6">
+                  <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16l-4-4m0 0l4-4m-4 4h18" />
+                    </svg>
+                    Token Breakdown
+                  </h3>
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-slate-400">Input Tokens</span>
+                        <span className="text-white font-medium">{formatNumber(platformStats?.total_input_tokens || 0)}</span>
+                      </div>
+                      <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full"
+                          style={{ width: `${platformStats?.total_tokens ? (platformStats.total_input_tokens / platformStats.total_tokens) * 100 : 0}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span className="text-slate-400">Output Tokens</span>
+                        <span className="text-white font-medium">{formatNumber(platformStats?.total_output_tokens || 0)}</span>
+                      </div>
+                      <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full"
+                          style={{ width: `${platformStats?.total_tokens ? (platformStats.total_output_tokens / platformStats.total_tokens) * 100 : 0}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="pt-2 border-t border-slate-700/50">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Avg per Analysis</span>
+                        <span className="text-white font-medium">{formatNumber(platformStats?.avg_tokens_per_analysis || 0)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-6">
+                  <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    Model Distribution
+                  </h3>
+                  <div className="space-y-3">
+                    {Object.entries(modelDistribution).length > 0 ? (
+                      Object.entries(modelDistribution).map(([model, count]) => (
+                        <div key={model} className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-gradient-to-r from-purple-500 to-pink-500" />
+                            <span className="text-slate-300 text-sm font-mono">{model}</span>
+                          </div>
+                          <span className="text-white font-medium">{count} analyses</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-slate-500 text-center py-4">No analyses yet</p>
+                    )}
+                    {platformStats?.most_used_model && (
+                      <div className="pt-3 border-t border-slate-700/50">
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Most Used</span>
+                          <span className="text-purple-400 font-mono text-sm">{platformStats.most_used_model}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Usage Chart (Simple Bar Chart) */}
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                  <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    Token Usage
+                  </h3>
+                  <div className="flex items-center gap-1 p-1 bg-slate-900/50 rounded-lg">
+                    {([
+                      { value: 'today', label: 'Today' },
+                      { value: 'week', label: '7 days' },
+                      { value: 'month', label: '30 days' },
+                      { value: 'year', label: 'Year' },
+                    ] as const).map((option) => (
+                      <button
+                        key={option.value}
+                        onClick={() => setChartTimeRange(option.value)}
+                        className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                          chartTimeRange === option.value
+                            ? 'bg-purple-500/20 text-purple-300 font-medium'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {dailyUsage.length > 0 ? (
+                  <>
+                    <div className="flex items-end h-40 gap-px">
+                      {dailyUsage.map((day) => {
+                        const maxTokens = Math.max(...dailyUsage.map(d => d.tokens), 1)
+                        const height = day.tokens > 0 ? (day.tokens / maxTokens) * 100 : 0
+                        return (
+                          <div 
+                            key={day.date}
+                            className="flex-1 min-w-[6px] group relative flex flex-col justify-end h-full"
+                          >
+                            <div 
+                              className={`w-full rounded-t transition-colors cursor-pointer ${
+                                day.tokens > 0 
+                                  ? 'bg-gradient-to-t from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400' 
+                                  : 'bg-slate-700/30 hover:bg-slate-600/50'
+                              }`}
+                              style={{ height: day.tokens > 0 ? `${Math.max(height, 8)}%` : '4px' }}
+                            />
+                            {/* Tooltip */}
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-xs text-white opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10">
+                              <p className="font-medium">{day.date}</p>
+                              <p className="text-slate-400">{formatNumber(day.tokens)} tokens</p>
+                              <p className="text-slate-400">{day.analyses} {day.analyses === 1 ? 'analysis' : 'analyses'}</p>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="flex justify-between mt-2 text-xs text-slate-500">
+                      <span>{dailyUsage[0]?.date}</span>
+                      <span>{dailyUsage[dailyUsage.length - 1]?.date}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-center h-40 text-slate-500">
+                    <p>No usage data available</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Per-User Token Stats */}
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="p-4 border-b border-slate-700/50">
+                  <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    Usage by User
+                  </h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-slate-900/50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">User</th>
+                        <th className="px-4 py-3 text-right text-sm font-medium text-slate-400">Analyses</th>
+                        <th className="px-4 py-3 text-right text-sm font-medium text-slate-400">Input</th>
+                        <th className="px-4 py-3 text-right text-sm font-medium text-slate-400">Output</th>
+                        <th className="px-4 py-3 text-right text-sm font-medium text-slate-400">Total</th>
+                        <th className="px-4 py-3 text-right text-sm font-medium text-slate-400">Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-700/50">
+                      {userTokenStats.length > 0 ? (
+                        userTokenStats.map((u) => (
+                          <tr key={u.user_id} className="hover:bg-slate-800/50">
+                            <td className="px-4 py-3">
+                              <p className="text-white font-medium">{u.user_email}</p>
+                              {u.last_analysis_at && (
+                                <p className="text-slate-500 text-xs">Last: {formatDate(u.last_analysis_at)}</p>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-right text-slate-300">{u.total_analyses}</td>
+                            <td className="px-4 py-3 text-right text-blue-400 font-mono text-sm">{formatNumber(u.total_input_tokens)}</td>
+                            <td className="px-4 py-3 text-right text-purple-400 font-mono text-sm">{formatNumber(u.total_output_tokens)}</td>
+                            <td className="px-4 py-3 text-right text-white font-medium">{formatNumber(u.total_tokens)}</td>
+                            <td className="px-4 py-3 text-right text-emerald-400 font-mono text-sm">{formatCost(u.estimated_cost_usd)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                            No usage data yet
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )
+        ) : loading ? (
           activeTab === 'users' ? (
             <UserTableSkeleton rows={5} />
           ) : (
@@ -428,8 +783,16 @@ export default function AdminDashboard({ user }: { user: User }) {
                         <td className="px-4 py-3 text-slate-400 text-sm">{formatDate(u.created_at)}</td>
                         <td className="px-4 py-3">
                           <select
-                            value={u.role}
-                            onChange={(e) => openRoleModal(u, e.target.value)}
+                            key={`${u.id}-${u.role}`}
+                            defaultValue={u.role}
+                            onChange={(e) => {
+                              const newRole = e.target.value
+                              if (newRole !== u.role) {
+                                openRoleModal(u, newRole)
+                                // Reset select to original value
+                                e.target.value = u.role
+                              }
+                            }}
                             className="bg-slate-700 text-white text-sm rounded-lg px-2 py-1 border border-slate-600 cursor-pointer"
                             disabled={u.id === user.id}
                           >
@@ -472,8 +835,16 @@ export default function AdminDashboard({ user }: { user: User }) {
                   <div className="flex items-center justify-between pt-3 border-t border-slate-700/50">
                     <p className="text-slate-500 text-sm">Joined {formatDate(u.created_at)}</p>
                     <select
-                      value={u.role}
-                      onChange={(e) => openRoleModal(u, e.target.value)}
+                      key={`mobile-${u.id}-${u.role}`}
+                      defaultValue={u.role}
+                      onChange={(e) => {
+                        const newRole = e.target.value
+                        if (newRole !== u.role) {
+                          openRoleModal(u, newRole)
+                          // Reset select to original value
+                          e.target.value = u.role
+                        }
+                      }}
                       className="bg-slate-700 text-white text-sm rounded-lg px-2 py-1 border border-slate-600"
                       disabled={u.id === user.id}
                     >

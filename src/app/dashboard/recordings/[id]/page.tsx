@@ -39,10 +39,18 @@ export default async function RecordingDetailPage({ params }: PageProps) {
     .eq('recording_id', id)
     .single()
 
+  // Fetch analysis if exists
+  const { data: analysis } = await supabase
+    .from('audio_analyses')
+    .select('*')
+    .eq('recording_id', id)
+    .single()
+
   return (
     <RecordingDetailClient 
       recording={recording} 
-      transcript={transcript} 
+      transcript={transcript}
+      analysis={analysis}
       user={user}
     />
   )

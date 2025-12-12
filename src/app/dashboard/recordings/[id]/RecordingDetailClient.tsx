@@ -9,17 +9,20 @@ import { useToast } from '@/components/ui/Toast'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { DetailPageSkeleton } from '@/components/ui/Skeleton'
 import AudioEditor from '@/components/AudioEditor'
+import AnalysisDisplay from '@/components/AnalysisDisplay'
 import { User } from '@supabase/supabase-js'
-import { Recording, Transcript } from '@/types/database'
+import { Recording, Transcript, AudioAnalysis } from '@/types/database'
 
 interface Props {
   recording: Recording
   transcript: Transcript | null
+  analysis: AudioAnalysis | null
   user: User
 }
 
-export default function RecordingDetailClient({ recording, transcript: initialTranscript, user }: Props) {
+export default function RecordingDetailClient({ recording, transcript: initialTranscript, analysis: initialAnalysis, user }: Props) {
   const [transcript, setTranscript] = useState<Transcript | null>(initialTranscript)
+  const [analysis, setAnalysis] = useState<AudioAnalysis | null>(initialAnalysis)
   const [audioUrl, setAudioUrl] = useState<string>('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
@@ -27,6 +30,19 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
   const [currentStatus, setCurrentStatus] = useState(recording.status)
   const [isLoading, setIsLoading] = useState(true)
   const [showDetails, setShowDetails] = useState(false)
+  
+  // Rename state
+  const [isEditing, setIsEditing] = useState(false)
+  const [fileName, setFileName] = useState(recording.file_name)
+  const [isSavingName, setIsSavingName] = useState(false)
+  
+  // Progress tracking
+  const [analysisProgress, setAnalysisProgress] = useState({
+    status: initialAnalysis?.processing_status || 'pending',
+    totalChunks: initialAnalysis?.total_chunks || 0,
+    completedChunks: initialAnalysis?.completed_chunks || 0,
+    message: initialAnalysis?.current_chunk_message || '',
+  })
   
   // Delete modal
   const [deleteModal, setDeleteModal] = useState(false)
@@ -48,11 +64,56 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
 
   useEffect(() => {
     loadAudioUrl()
-    if (currentStatus === 'processing') {
-      const interval = setInterval(checkStatus, 5000)
+    
+    // Subscribe to realtime updates for this analysis
+    if (supabase && recording.id) {
+      const channel = supabase
+        .channel(`analysis-${recording.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'audio_analyses',
+            filter: `recording_id=eq.${recording.id}`,
+          },
+          (payload) => {
+            console.log('Realtime update:', payload.new)
+            const updated = payload.new as AudioAnalysis
+            setAnalysis(updated)
+            setAnalysisProgress({
+              status: updated.processing_status || 'pending',
+              totalChunks: updated.total_chunks || 0,
+              completedChunks: updated.completed_chunks || 0,
+              message: updated.current_chunk_message || '',
+            })
+            
+            if (updated.processing_status === 'done') {
+              setIsAnalyzing(false)
+              setCurrentStatus('done')
+              toast.success('Analysis complete!')
+            } else if (updated.processing_status === 'error') {
+              setIsAnalyzing(false)
+              setAnalysisError(updated.error_message || 'Analysis failed')
+              toast.error('Analysis failed')
+            }
+          }
+        )
+        .subscribe()
+
+      return () => {
+        supabase.removeChannel(channel)
+      }
+    }
+  }, [recording.id, supabase])
+
+  // Polling fallback for when realtime doesn't work
+  useEffect(() => {
+    if (currentStatus === 'processing' || analysisProgress.status === 'processing') {
+      const interval = setInterval(checkStatus, 10000)
       return () => clearInterval(interval)
     }
-  }, [currentStatus])
+  }, [currentStatus, analysisProgress.status])
 
   const loadAudioUrl = async () => {
     if (!supabase) {
@@ -73,15 +134,28 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
   const checkStatus = async () => {
     if (!supabase) return
 
-    const { data } = await supabase
-      .from('recordings')
-      .select('status')
-      .eq('id', recording.id)
+    // Check analysis progress
+    const { data: analysisData } = await supabase
+      .from('audio_analyses')
+      .select('*')
+      .eq('recording_id', recording.id)
       .single()
 
-    if (data && data.status !== currentStatus) {
-      setCurrentStatus(data.status)
-      if (data.status === 'done') {
+    if (analysisData) {
+      setAnalysis(analysisData as AudioAnalysis)
+      setAnalysisProgress({
+        status: analysisData.processing_status || 'pending',
+        totalChunks: analysisData.total_chunks || 0,
+        completedChunks: analysisData.completed_chunks || 0,
+        message: analysisData.current_chunk_message || '',
+      })
+
+      if (analysisData.processing_status === 'done') {
+        setCurrentStatus('done')
+        setIsAnalyzing(false)
+        toast.success('Analysis complete!')
+
+        // Also load transcript for backward compatibility
         const { data: newTranscript } = await supabase
           .from('transcripts')
           .select('*')
@@ -90,9 +164,22 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
         
         if (newTranscript) {
           setTranscript(newTranscript)
-          toast.success('Transcription complete!')
         }
+      } else if (analysisData.processing_status === 'error') {
+        setIsAnalyzing(false)
+        setAnalysisError(analysisData.error_message || 'Analysis failed')
       }
+    }
+
+    // Also check recording status
+    const { data: recordingData } = await supabase
+      .from('recordings')
+      .select('status')
+      .eq('id', recording.id)
+      .single()
+
+    if (recordingData && recordingData.status !== currentStatus) {
+      setCurrentStatus(recordingData.status)
     }
   }
 
@@ -103,15 +190,15 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
     setAnalysisError(null)
 
     try {
-      await supabase
-        .from('recordings')
-        .update({ status: 'processing' })
-        .eq('id', recording.id)
-
       setCurrentStatus('processing')
-      toast.info('Analysis started. This may take a few minutes.')
+      setAnalysisProgress({
+        status: 'processing',
+        totalChunks: 0,
+        completedChunks: 0,
+        message: 'Starting analysis...',
+      })
 
-      const response = await fetch('/api/transcribe', {
+      const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -126,16 +213,26 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
         const error = await response.json()
         throw new Error(error.message || 'Failed to start analysis')
       }
+
+      const result = await response.json()
+      
+      // Update progress from response
+      setAnalysisProgress({
+        status: 'processing',
+        totalChunks: result.totalChunks || 0,
+        completedChunks: 0,
+        message: `Processing ${result.totalChunks} chunks (est. ${result.estimatedMinutes} min)...`,
+      })
+      
+      toast.info(`Analysis started! Processing ${result.totalChunks} chunks. Estimated time: ${result.estimatedMinutes} minutes.`)
+      
+      // Don't set isAnalyzing to false - realtime subscription will handle that
     } catch (err) {
       setAnalysisError(err instanceof Error ? err.message : 'Failed to start analysis')
       toast.error('Failed to start analysis')
-      await supabase
-        .from('recordings')
-        .update({ status: 'done' })
-        .eq('id', recording.id)
       setCurrentStatus('done')
-    } finally {
       setIsAnalyzing(false)
+      setAnalysisProgress(prev => ({ ...prev, status: 'error' }))
     }
   }
 
@@ -166,6 +263,44 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
       toast.error('Failed to delete recording')
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  const handleRename = async () => {
+    if (!supabase || !fileName.trim() || fileName === recording.file_name) {
+      setIsEditing(false)
+      setFileName(recording.file_name)
+      return
+    }
+
+    setIsSavingName(true)
+    try {
+      const { error } = await supabase
+        .from('recordings')
+        .update({ file_name: fileName.trim() })
+        .eq('id', recording.id)
+
+      if (error) throw error
+      
+      toast.success('Recording renamed')
+      setIsEditing(false)
+      // Update the recording object for display
+      recording.file_name = fileName.trim()
+    } catch (err) {
+      console.error('Rename error:', err)
+      toast.error('Failed to rename recording')
+      setFileName(recording.file_name)
+    } finally {
+      setIsSavingName(false)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleRename()
+    } else if (e.key === 'Escape') {
+      setIsEditing(false)
+      setFileName(recording.file_name)
     }
   }
 
@@ -308,7 +443,7 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
           <svg className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
-          <span className="text-slate-300 truncate max-w-[200px] sm:max-w-none">{recording.file_name}</span>
+          <span className="text-slate-300 truncate max-w-[200px] sm:max-w-none">{fileName}</span>
         </nav>
       </div>
 
@@ -318,9 +453,42 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
         <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6 mb-6">
           <div className="flex items-start justify-between gap-4 mb-6">
             <div className="flex-1 min-w-0">
-              <h1 className="text-2xl font-bold text-white truncate mb-2">
-                {recording.file_name}
-              </h1>
+              {/* Editable Title */}
+              {isEditing ? (
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="text"
+                    value={fileName}
+                    onChange={(e) => setFileName(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onBlur={handleRename}
+                    autoFocus
+                    className="text-2xl font-bold text-white bg-slate-700/50 border border-amber-500/50 rounded-lg px-3 py-1 w-full focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                    disabled={isSavingName}
+                  />
+                  {isSavingName && (
+                    <svg className="animate-spin w-5 h-5 text-amber-400 flex-shrink-0" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 group mb-2">
+                  <h1 className="text-2xl font-bold text-white truncate">
+                    {fileName}
+                  </h1>
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="p-1.5 text-slate-500 hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-slate-700/50"
+                    title="Rename"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    </svg>
+                  </button>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-3 text-slate-400 text-sm">
                 <span className="flex items-center gap-1">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -390,38 +558,72 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
               </>
             )}
             
-            {!transcript && currentStatus === 'done' && (
+            {/* Start Analysis - when no analysis exists */}
+            {!analysis && currentStatus === 'done' && !isAnalyzing && (
               <button
                 onClick={handleStartAnalysis}
                 disabled={isAnalyzing}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-medium rounded-lg shadow-lg shadow-amber-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white font-medium rounded-lg shadow-lg shadow-purple-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isAnalyzing ? (
-                  <>
-                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Starting Analysis...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                    </svg>
-                    Start AI Analysis
-                  </>
-                )}
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+                🤖 Start AI Analysis
               </button>
             )}
 
-            {currentStatus === 'processing' && (
-              <div className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500/20 text-amber-400 rounded-lg">
+            {/* Retry Analysis - when error occurred */}
+            {(currentStatus === 'error' || analysisError || analysis?.processing_status === 'error') && !isAnalyzing && (
+              <button
+                onClick={handleStartAnalysis}
+                disabled={isAnalyzing}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white font-medium rounded-lg shadow-lg shadow-red-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                🔄 Retry Analysis
+              </button>
+            )}
+
+            {/* Re-analyze - when analysis exists and completed */}
+            {analysis && analysis.processing_status === 'done' && !isAnalyzing && (
+              <button
+                onClick={handleStartAnalysis}
+                disabled={isAnalyzing}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Run analysis again with fresh results"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Re-analyze
+              </button>
+            )}
+
+            {/* Analyzing in progress */}
+            {isAnalyzing && (
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg">
                 <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                Analyzing... This may take a few minutes
+                Analyzing with AI...
+              </div>
+            )}
+
+            {/* Processing status indicator */}
+            {(currentStatus === 'processing' || analysisProgress.status === 'processing') && !isAnalyzing && (
+              <div className="inline-flex items-center gap-3 px-4 py-2 bg-purple-500/20 text-purple-400 rounded-lg">
+                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span>
+                  {analysisProgress.totalChunks > 0 
+                    ? `Chunk ${analysisProgress.completedChunks + 1}/${analysisProgress.totalChunks}`
+                    : 'Starting...'}
+                </span>
               </div>
             )}
           </div>
@@ -433,76 +635,105 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
           )}
         </div>
 
-        {/* Transcript Section */}
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              <h2 className="text-xl font-semibold text-white">Transcript</h2>
-            </div>
-            
-            {transcript && (
-              <button
-                onClick={handleCopyTranscript}
-                className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
-              >
-                {copySuccess ? (
-                  <>
-                    <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    Copied!
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    Copy
-                  </>
-                )}
-              </button>
-            )}
-          </div>
-
-          {transcript ? (
-            <div className="prose prose-invert max-w-none">
-              <div className="bg-slate-900/50 rounded-xl p-6 border border-slate-700/30 max-h-[500px] overflow-y-auto">
-                <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">
-                  {transcript.text}
-                </p>
-              </div>
-              <p className="text-slate-500 text-sm mt-4">
-                Transcribed on {formatDate(transcript.created_at)}
-              </p>
-            </div>
-          ) : currentStatus === 'processing' ? (
-            <div className="text-center py-12">
-              <div className="w-16 h-16 mx-auto rounded-full bg-amber-500/20 flex items-center justify-center mb-4 animate-pulse-glow">
-                <svg className="animate-spin w-8 h-8 text-amber-400" viewBox="0 0 24 24">
+        {/* Analysis Section */}
+        {analysis && analysis.processing_status === 'done' ? (
+          <AnalysisDisplay analysis={analysis} />
+        ) : (currentStatus === 'processing' || analysisProgress.status === 'processing' || (analysis && analysis.processing_status === 'processing')) ? (
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
+            <div className="text-center py-8">
+              {/* Progress Header */}
+              <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-purple-500/20 to-indigo-500/20 flex items-center justify-center mb-6 animate-pulse-glow">
+                <svg className="animate-spin w-10 h-10 text-purple-400" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
               </div>
-              <p className="text-slate-400">AI is analyzing your recording...</p>
-              <p className="text-slate-500 text-sm mt-1">This may take several minutes for longer recordings</p>
+              <h3 className="text-lg font-medium text-white mb-2">🤖 AI is analyzing your recording...</h3>
+              <p className="text-slate-400 mb-6">{analysisProgress.message || 'Processing...'}</p>
+              
+              {/* Progress Bar */}
+              {analysisProgress.totalChunks > 0 && (
+                <div className="max-w-md mx-auto mb-6">
+                  <div className="flex justify-between text-sm text-slate-400 mb-2">
+                    <span>Progress</span>
+                    <span>{analysisProgress.completedChunks}/{analysisProgress.totalChunks} chunks</span>
+                  </div>
+                  <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-500 ease-out"
+                      style={{ width: `${(analysisProgress.completedChunks / analysisProgress.totalChunks) * 100}%` }}
+                    />
+                  </div>
+                  <p className="text-slate-500 text-xs mt-2">
+                    ~{Math.ceil((analysisProgress.totalChunks - analysisProgress.completedChunks) * 1.5)} minutes remaining
+                  </p>
+                </div>
+              )}
+              
+              {/* Show sections as they load */}
+              {analysis && (analysis.sections as unknown[])?.length > 0 && (
+                <div className="mt-6 text-left max-w-2xl mx-auto">
+                  <h4 className="text-sm font-medium text-slate-300 mb-3">✅ Completed sections:</h4>
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {(analysis.sections as { timestamp_start: string; title: string; summary: string }[]).map((section, i) => (
+                      <div key={i} className="p-3 bg-slate-700/50 rounded-lg border border-slate-600/50">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs font-mono text-purple-400">{section.timestamp_start}</span>
+                          <span className="text-sm font-medium text-white">{section.title}</span>
+                        </div>
+                        <p className="text-xs text-slate-400 line-clamp-2">{section.summary}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          ) : (
+          </div>
+        ) : (
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
             <div className="text-center py-12">
-              <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-slate-700/50 to-slate-800/50 flex items-center justify-center mb-6">
-                <svg className="w-10 h-10 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <div className="w-24 h-24 mx-auto rounded-full bg-gradient-to-br from-purple-500/10 to-indigo-500/10 flex items-center justify-center mb-6">
+                <svg className="w-12 h-12 text-purple-400/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-medium text-white mb-2">No transcript yet</h3>
-              <p className="text-slate-500 text-sm max-w-sm mx-auto">Click &quot;Start AI Analysis&quot; to transcribe this recording using advanced speech recognition</p>
+              <h3 className="text-xl font-medium text-white mb-3">Ready for AI Analysis</h3>
+              <p className="text-slate-400 max-w-md mx-auto mb-6">
+                Click &quot;Start AI Analysis&quot; to unlock powerful insights from your recording:
+              </p>
+              <div className="grid sm:grid-cols-2 gap-3 max-w-lg mx-auto text-left mb-6">
+                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
+                  <span className="text-lg">📝</span>
+                  <div>
+                    <div className="text-sm font-medium text-white">Full Transcript</div>
+                    <div className="text-xs text-slate-400">Word-for-word transcription</div>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
+                  <span className="text-lg">⏱️</span>
+                  <div>
+                    <div className="text-sm font-medium text-white">Timeline</div>
+                    <div className="text-xs text-slate-400">Topics by timestamp</div>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
+                  <span className="text-lg">📖</span>
+                  <div>
+                    <div className="text-sm font-medium text-white">Glossary</div>
+                    <div className="text-xs text-slate-400">Technical terms explained</div>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 p-3 bg-slate-700/30 rounded-xl">
+                  <span className="text-lg">💡</span>
+                  <div>
+                    <div className="text-sm font-medium text-white">Coaching Tips</div>
+                    <div className="text-xs text-slate-400">AI-powered insights</div>
+                  </div>
+                </div>
+              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Technical Details (Collapsible) */}
         <div className="mt-6">
