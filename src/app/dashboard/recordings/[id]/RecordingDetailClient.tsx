@@ -13,6 +13,8 @@ import AnalysisDisplay from '@/components/AnalysisDisplay'
 import TagManager from '@/components/TagManager'
 import BookmarkManager from '@/components/BookmarkManager'
 import CommentsManager from '@/components/CommentsManager'
+import ChaptersPanel, { CurrentChapterIndicator } from '@/components/ChaptersPanel'
+import CustomAudioPlayer from '@/components/CustomAudioPlayer'
 import ExportButton from '@/components/ExportButton'
 import { User } from '@supabase/supabase-js'
 import { Recording, Transcript, AudioAnalysis, Tag } from '@/types/database'
@@ -656,31 +658,23 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
             </div>
           </div>
 
-          {/* Audio Player */}
-          {audioUrl && (
+          {/* Custom Audio Player with YouTube-style chapters */}
+          {audioUrl && recording.duration && (
             <div className="mb-6">
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-slate-400">Audio Player</label>
-                {/* Playback Speed Control */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-500">Speed:</span>
-                  <div className="flex bg-slate-800 rounded-lg p-0.5">
-                    {[0.5, 0.75, 1, 1.25, 1.5, 2].map((speed) => (
-                      <button
-                        key={speed}
-                        onClick={() => changePlaybackSpeed(speed)}
-                        className={`px-2 py-1 text-xs rounded-md transition-all ${
-                          playbackSpeed === speed
-                            ? 'bg-emerald-500 text-white'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                        }`}
-                      >
-                        {speed}x
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
+              <CustomAudioPlayer
+                src={audioUrl}
+                duration={recording.duration}
+                timeline={analysis?.timeline}
+                onTimeUpdate={setCurrentTime}
+                playbackSpeed={playbackSpeed}
+                onPlaybackSpeedChange={changePlaybackSpeed}
+              />
+            </div>
+          )}
+
+          {/* Fallback for recordings without duration */}
+          {audioUrl && !recording.duration && (
+            <div className="mb-6">
               <audio
                 ref={audioRef}
                 controls
