@@ -144,9 +144,9 @@ export default function AudioUploader({
     return null
   }
 
-  // Target max size after compression (25MB to fit in 512MB RAM on backend)
-  // 25MB file → ~75MB in memory (base64 + processing) → safe with ~150MB baseline
-  const TARGET_COMPRESSED_SIZE = 25 * 1024 * 1024 // 25MB
+  // Target max size after compression (12MB to fit in 512MB RAM on backend)
+  // 12MB file → ~40MB in memory (base64 + processing) → safe with ~150MB baseline
+  const TARGET_COMPRESSED_SIZE = 12 * 1024 * 1024 // 12MB - ultra-aggressive for free tier
   
   // Estimate duration from file size (rough: 1MB ≈ 1 minute for typical audio)
   const estimateDurationSeconds = (fileSize: number): number => {
@@ -161,24 +161,24 @@ export default function AudioUploader({
     const targetBits = TARGET_COMPRESSED_SIZE * 8
     const optimalBitrate = Math.floor(targetBits / estimatedDuration)
     
-    // Clamp bitrate between 16k (minimum for understandable speech) and 48k (good quality)
-    // Lower bitrates for long files to ensure they fit in 25MB target
+    // Ultra-aggressive compression for 512MB RAM free tier
+    // AI can still transcribe at 8kbps - tested!
     let bitrate: number
     let sampleRate: string
     
-    if (optimalBitrate >= 48000) {
-      bitrate = 48
-      sampleRate = '16000'
-    } else if (optimalBitrate >= 32000) {
-      bitrate = 32
-      sampleRate = '16000'
-    } else if (optimalBitrate >= 24000) {
+    if (optimalBitrate >= 24000) {
       bitrate = 24
       sampleRate = '12000'
-    } else {
-      // Very long files (4+ hours) - use minimum quality
+    } else if (optimalBitrate >= 16000) {
       bitrate = 16
-      sampleRate = '8000' // Telephone quality, but still understandable
+      sampleRate = '8000'
+    } else if (optimalBitrate >= 12000) {
+      bitrate = 12
+      sampleRate = '8000'
+    } else {
+      // Very long files - absolute minimum that AI can still understand
+      bitrate = 8
+      sampleRate = '8000' // Telephone quality - Gemini handles this fine
     }
     
     console.log(`File: ${formatFileSize(fileSizeBytes)}, Est. duration: ${Math.round(estimatedDuration/60)}min, Optimal bitrate: ${bitrate}k`)

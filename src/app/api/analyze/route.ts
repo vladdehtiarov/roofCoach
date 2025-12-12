@@ -11,7 +11,7 @@ export const maxDuration = 900
 const CHUNK_DURATION_MINUTES = 30 // Request transcript in 30-minute chunks
 const RATE_LIMIT_DELAY_MS = 20000 // 20 seconds between requests (Gemini has 250K tokens/min limit)
 const MODEL_NAME = 'gemini-2.0-flash-exp'
-const MAX_CONCURRENT_ANALYSES = 2 // Maximum simultaneous analyses to prevent memory overload
+const MAX_CONCURRENT_ANALYSES = 1 // Only 1 analysis at a time for 512MB RAM limit
 
 // Gemini pricing (per 1M tokens) - approximate for cost estimation
 const GEMINI_PRICING = {
@@ -81,10 +81,14 @@ export async function POST(request: Request) {
     }
 
     // Check queue - limit concurrent analyses to prevent memory overload
+    // Only count analyses started in the last 30 minutes (ignore stuck ones)
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    
     const { data: activeAnalyses, error: queueError } = await supabase
       .from('audio_analyses')
       .select('id, recording_id, created_at')
       .eq('processing_status', 'processing')
+      .gte('created_at', thirtyMinutesAgo) // Only recent ones
       .order('created_at', { ascending: true })
 
     if (!queueError && activeAnalyses && activeAnalyses.length >= MAX_CONCURRENT_ANALYSES) {
