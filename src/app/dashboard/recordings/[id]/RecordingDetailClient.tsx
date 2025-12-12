@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
@@ -10,8 +10,11 @@ import { ConfirmModal } from '@/components/ui/Modal'
 import { DetailPageSkeleton } from '@/components/ui/Skeleton'
 import AudioEditor from '@/components/AudioEditor'
 import AnalysisDisplay from '@/components/AnalysisDisplay'
+import TagManager from '@/components/TagManager'
+import BookmarkManager from '@/components/BookmarkManager'
+import ExportButton from '@/components/ExportButton'
 import { User } from '@supabase/supabase-js'
-import { Recording, Transcript, AudioAnalysis } from '@/types/database'
+import { Recording, Transcript, AudioAnalysis, Tag } from '@/types/database'
 
 interface Props {
   recording: Recording
@@ -35,6 +38,15 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
   const [isEditing, setIsEditing] = useState(false)
   const [fileName, setFileName] = useState(recording.file_name)
   const [isSavingName, setIsSavingName] = useState(false)
+  
+  // Audio player controls
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const [playbackSpeed, setPlaybackSpeed] = useState(1)
+  const [currentTime, setCurrentTime] = useState(0)
+  
+  // Tags
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [recordingTags, setRecordingTags] = useState<Tag[]>([])
   
   // Progress tracking
   const [analysisProgress, setAnalysisProgress] = useState<{
@@ -69,6 +81,7 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
 
   useEffect(() => {
     loadAudioUrl()
+    loadRecordingTags()
     
     // Subscribe to realtime updates for this analysis
     if (supabase && recording.id) {
@@ -134,6 +147,53 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
       setAudioUrl(data.signedUrl)
     }
     setIsLoading(false)
+  }
+
+  const loadRecordingTags = async () => {
+    if (!supabase) return
+    
+    try {
+      const { data, error } = await supabase
+        .from('recording_tags')
+        .select('tag_id, tags(*)')
+        .eq('recording_id', recording.id)
+      
+      if (!error && data) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tags = data.map((rt: any) => rt.tags).filter(Boolean) as Tag[]
+        setRecordingTags(tags)
+        setSelectedTags(tags.map(t => t.id))
+      }
+    } catch (err) {
+      console.error('Error loading tags:', err)
+    }
+  }
+
+  const handleTagsChange = async (newTagIds: string[]) => {
+    if (!supabase) return
+    
+    const currentTagIds = selectedTags
+    const toAdd = newTagIds.filter(id => !currentTagIds.includes(id))
+    const toRemove = currentTagIds.filter(id => !newTagIds.includes(id))
+
+    // Add new tags
+    for (const tagId of toAdd) {
+      await supabase.from('recording_tags').insert({
+        recording_id: recording.id,
+        tag_id: tagId,
+      })
+    }
+
+    // Remove old tags
+    for (const tagId of toRemove) {
+      await supabase.from('recording_tags')
+        .delete()
+        .eq('recording_id', recording.id)
+        .eq('tag_id', tagId)
+    }
+
+    setSelectedTags(newTagIds)
+    loadRecordingTags() // Reload to get full tag objects
   }
 
   const checkStatus = async () => {
@@ -394,6 +454,35 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
     return `${minutes}m ${secs}s`
   }
 
+  // Parse timestamp string to seconds (handles "1:23:45", "23:45", "45")
+  const parseTimestamp = (timestamp: string): number => {
+    const parts = timestamp.split(':').map(Number)
+    if (parts.length === 3) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    } else if (parts.length === 2) {
+      return parts[0] * 60 + parts[1]
+    }
+    return parts[0] || 0
+  }
+
+  // Jump to specific timestamp in audio
+  const seekToTimestamp = (timestamp: string) => {
+    if (audioRef.current) {
+      const seconds = parseTimestamp(timestamp)
+      audioRef.current.currentTime = seconds
+      audioRef.current.play()
+      toast.info(`Playing from ${timestamp}`)
+    }
+  }
+
+  // Change playback speed
+  const changePlaybackSpeed = (speed: number) => {
+    setPlaybackSpeed(speed)
+    if (audioRef.current) {
+      audioRef.current.playbackRate = speed
+    }
+  }
+
   const getStatusConfig = (status: string) => {
     const configs = {
       uploading: { bg: 'bg-blue-500/20', text: 'text-blue-400', label: 'Uploading', icon: '⏳' },
@@ -540,25 +629,78 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
                   {formatDate(recording.created_at)}
                 </span>
               </div>
+              
+              {/* Tags */}
+              <div className="mt-3">
+                <TagManager
+                  userId={user.id}
+                  recordingId={recording.id}
+                  selectedTags={selectedTags}
+                  onTagsChange={handleTagsChange}
+                  compact={true}
+                />
+              </div>
             </div>
-            <span className={`px-3 py-1.5 rounded-full text-sm font-medium ${statusConfig.bg} ${statusConfig.text} flex items-center gap-2 flex-shrink-0`}>
-              <span>{statusConfig.icon}</span>
-              {statusConfig.label}
-            </span>
+            <div className="flex flex-col items-end gap-2">
+              <span className={`px-3 py-1.5 rounded-full text-sm font-medium ${statusConfig.bg} ${statusConfig.text} flex items-center gap-2 flex-shrink-0`}>
+                <span>{statusConfig.icon}</span>
+                {statusConfig.label}
+              </span>
+              {/* Export button */}
+              <ExportButton recording={recording} analysis={analysis} />
+            </div>
           </div>
 
           {/* Audio Player */}
           {audioUrl && (
             <div className="mb-6">
-              <label className="block text-sm font-medium text-slate-400 mb-2">Audio Player</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-slate-400">Audio Player</label>
+                {/* Playback Speed Control */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">Speed:</span>
+                  <div className="flex bg-slate-800 rounded-lg p-0.5">
+                    {[0.5, 0.75, 1, 1.25, 1.5, 2].map((speed) => (
+                      <button
+                        key={speed}
+                        onClick={() => changePlaybackSpeed(speed)}
+                        className={`px-2 py-1 text-xs rounded-md transition-all ${
+                          playbackSpeed === speed
+                            ? 'bg-emerald-500 text-white'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                        }`}
+                      >
+                        {speed}x
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
               <audio
+                ref={audioRef}
                 controls
                 className="w-full h-12 rounded-lg"
                 preload="metadata"
                 src={audioUrl}
+                onTimeUpdate={(e) => setCurrentTime((e.target as HTMLAudioElement).currentTime)}
               >
                 Your browser does not support the audio element.
               </audio>
+              
+              {/* Bookmarks */}
+              <div className="mt-4">
+                <BookmarkManager
+                  recordingId={recording.id}
+                  userId={user.id}
+                  currentTime={currentTime}
+                  onSeek={(seconds) => {
+                    if (audioRef.current) {
+                      audioRef.current.currentTime = seconds
+                      audioRef.current.play()
+                    }
+                  }}
+                />
+              </div>
             </div>
           )}
 
@@ -668,7 +810,7 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
 
         {/* Analysis Section */}
         {analysis && analysis.processing_status === 'done' ? (
-          <AnalysisDisplay analysis={analysis} />
+          <AnalysisDisplay analysis={analysis} onSeek={seekToTimestamp} />
         ) : analysisProgress.status === 'queued' ? (
           <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
             <div className="text-center py-8">

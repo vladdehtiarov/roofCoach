@@ -111,20 +111,25 @@ export default function AudioUploader({
     loadFFmpeg()
   }, [])
 
+  // Supported formats - only those that FFmpeg.wasm can reliably compress
+  // WebM/OGG/Opus are excluded - they require browser conversion which is unreliable for large files
   const ALLOWED_TYPES = [
-    'audio/mpeg',
-    'audio/mp3',
-    'audio/wav',
-    'audio/wave',
-    'audio/x-wav',
-    'audio/ogg',
-    'audio/flac',
-    'audio/m4a',
-    'audio/mp4',
-    'audio/x-m4a',
-    'audio/aac',
-    'audio/webm',
+    'audio/mpeg',      // MP3
+    'audio/mp3',       // MP3 (alternative MIME)
+    'audio/wav',       // WAV
+    'audio/wave',      // WAV (alternative MIME)
+    'audio/x-wav',     // WAV (alternative MIME)
+    'audio/flac',      // FLAC
+    'audio/m4a',       // M4A
+    'audio/mp4',       // M4A/AAC container
+    'audio/x-m4a',     // M4A (alternative MIME)
+    'audio/aac',       // AAC
   ]
+
+  // Formats NOT supported (for user reference):
+  // - WebM (audio/webm) - Opus codec not supported by FFmpeg.wasm
+  // - OGG (audio/ogg) - Vorbis/Opus codec issues
+  // - Opus (.opus) - Not supported
 
   const MAX_FILE_SIZE = 1000 * 1024 * 1024 // 1GB - suitable for long audio files
 
@@ -137,8 +142,16 @@ export default function AudioUploader({
   }
 
   const validateFile = (file: File): string | null => {
-    if (!ALLOWED_TYPES.includes(file.type) && !file.name.match(/\.(mp3|wav|ogg|flac|m4a|aac|webm)$/i)) {
-      return 'Please upload a valid audio file (MP3, WAV, OGG, FLAC, M4A, AAC, or WebM)'
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    const supportedExtensions = ['mp3', 'wav', 'flac', 'm4a', 'aac', 'mp4']
+    
+    if (!ALLOWED_TYPES.includes(file.type) && !supportedExtensions.includes(extension || '')) {
+      // Check if it's a specifically unsupported format
+      const unsupportedFormats = ['webm', 'ogg', 'opus']
+      if (unsupportedFormats.includes(extension || '')) {
+        return `${extension?.toUpperCase()} format is not supported. Please convert to MP3, WAV, M4A, FLAC, or AAC.`
+      }
+      return 'Unsupported format. Please use: MP3, WAV, M4A, FLAC, or AAC'
     }
     if (file.size > MAX_FILE_SIZE) {
       return `File is too large. Maximum size is ${formatFileSize(MAX_FILE_SIZE)}`
@@ -1033,7 +1046,7 @@ export default function AudioUploader({
           <input
             ref={fileInputRef}
             type="file"
-            accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.webm"
+            accept=".mp3,.wav,.flac,.m4a,.aac,.mp4,audio/mpeg,audio/wav,audio/flac,audio/m4a,audio/aac"
             onChange={handleFileSelect}
             className="hidden"
             disabled={uploading || compression.isCompressing}

@@ -7,20 +7,25 @@ import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 import AudioUploader from '@/components/AudioUploader'
 import AudioRecorder from '@/components/AudioRecorder'
+import FolderManager from '@/components/FolderManager'
+import { TagDisplay } from '@/components/TagManager'
 import { useToast } from '@/components/ui/Toast'
 import { ConfirmModal } from '@/components/ui/Modal'
 import { RecordingListSkeleton } from '@/components/ui/Skeleton'
 import { User } from '@supabase/supabase-js'
-import { Recording, RecordingWithTranscript } from '@/types/database'
+import { Recording, RecordingWithTranscript, Tag, Folder } from '@/types/database'
 
 interface RecordingWithUrl extends RecordingWithTranscript {
   audioUrl?: string
+  tags?: Tag[]
+  analysis_status?: 'pending' | 'processing' | 'done' | 'error' | null
 }
 
 type FilterType = 'active' | 'archived' | 'all'
 type AnalysisFilter = 'all' | 'analyzed' | 'not_analyzed'
 type SortType = 'newest' | 'oldest' | 'name' | 'size' | 'duration' | 'analyzed_first'
 type InputMode = 'upload' | 'record'
+type MainTab = 'capture' | 'files'
 
 const ITEMS_PER_PAGE = 10
 
@@ -35,6 +40,7 @@ export default function DashboardClient({ user }: { user: User }) {
   const [isAdmin, setIsAdmin] = useState(false)
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null)
   const [inputMode, setInputMode] = useState<InputMode>('record')
+  const [mainTab, setMainTab] = useState<MainTab>('capture')
   
   // Delete modal state
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; recording: RecordingWithUrl | null }>({
@@ -47,6 +53,17 @@ export default function DashboardClient({ user }: { user: User }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [isSavingName, setIsSavingName] = useState(false)
+  
+  // Folders
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null)
+  const [showSidebar, setShowSidebar] = useState(true)
+  
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [isBulkArchiving, setIsBulkArchiving] = useState(false)
+  const [showBulkMoveModal, setShowBulkMoveModal] = useState(false)
 
   const router = useRouter()
   const toast = useToast()
@@ -62,12 +79,68 @@ export default function DashboardClient({ user }: { user: User }) {
   useEffect(() => {
     loadRecordings()
     checkAdminStatus()
-  }, [supabase, filter])
+    loadFolders()
+    
+    // Realtime subscription for analysis updates
+    if (supabase) {
+      const channel = supabase
+        .channel('dashboard-updates')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'audio_analyses',
+          },
+          (payload) => {
+            console.log('Analysis update:', payload)
+            // Update the recording's analysis status
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              const analysis = payload.new as { recording_id: string; processing_status: string; title?: string }
+              setRecordings(prev => prev.map(r => 
+                r.id === analysis.recording_id 
+                  ? { 
+                      ...r, 
+                      analysis_status: analysis.processing_status as RecordingWithUrl['analysis_status'],
+                      has_analysis: analysis.processing_status === 'done',
+                      analysis_title: analysis.title || r.analysis_title,
+                    }
+                  : r
+              ))
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'recordings',
+          },
+          (payload) => {
+            console.log('Recording update:', payload)
+            if (payload.eventType === 'UPDATE') {
+              const updated = payload.new as RecordingWithUrl
+              setRecordings(prev => prev.map(r => 
+                r.id === updated.id ? { ...r, ...updated } : r
+              ))
+            } else if (payload.eventType === 'DELETE') {
+              setRecordings(prev => prev.filter(r => r.id !== (payload.old as { id: string }).id))
+            }
+          }
+        )
+        .subscribe()
+
+      return () => {
+        supabase.removeChannel(channel)
+      }
+    }
+  }, [supabase, filter]) // Don't reload on folder change - just filter locally
 
   // Reset page when filter or search changes
   useEffect(() => {
     setCurrentPage(1)
-  }, [filter, analysisFilter, searchQuery, sortBy])
+  }, [filter, analysisFilter, searchQuery, sortBy, selectedFolderId])
 
   const checkAdminStatus = async () => {
     if (!supabase) return
@@ -77,6 +150,16 @@ export default function DashboardClient({ user }: { user: User }) {
       .eq('id', user.id)
       .single()
     setIsAdmin(data?.role === 'admin')
+  }
+
+  const loadFolders = async () => {
+    if (!supabase) return
+    const { data } = await supabase
+      .from('folders')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('name')
+    setFolders(data || [])
   }
 
   const getSignedUrl = async (filePath: string): Promise<string> => {
@@ -102,6 +185,7 @@ export default function DashboardClient({ user }: { user: User }) {
     
     setLoading(true)
     try {
+      // Try view first, fallback to recordings table
       let query = supabase
         .from('recordings_with_status')
         .select('*')
@@ -118,13 +202,24 @@ export default function DashboardClient({ user }: { user: User }) {
 
       if (error) throw error
 
+      // Fetch analysis statuses
+      const { data: analysesData } = await supabase
+        .from('audio_analyses')
+        .select('recording_id, processing_status')
+        .in('recording_id', (data || []).map(r => r.id))
+
+      const analysisMap = new Map(
+        (analysesData || []).map(a => [a.recording_id, a.processing_status])
+      )
+
       const recordingsWithUrls = await Promise.all(
         (data || []).map(async (recording) => {
           const audioUrl = await getSignedUrl(recording.file_path)
-          return { ...recording, audioUrl }
+          const analysis_status = analysisMap.get(recording.id) as RecordingWithUrl['analysis_status'] || null
+          return { ...recording, audioUrl, analysis_status }
         })
       )
-
+      
       setRecordings(recordingsWithUrls)
     } catch (err) {
       console.error('Error loading recordings:', err)
@@ -134,9 +229,25 @@ export default function DashboardClient({ user }: { user: User }) {
     }
   }
 
+  // Count recordings per folder
+  const folderCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    recordings.forEach(r => {
+      if (r.folder_id) {
+        counts[r.folder_id] = (counts[r.folder_id] || 0) + 1
+      }
+    })
+    return counts
+  }, [recordings])
+
   // Filter, sort and paginate recordings
   const processedRecordings = useMemo(() => {
     let result = [...recordings]
+
+    // Folder filter
+    if (selectedFolderId) {
+      result = result.filter(r => r.folder_id === selectedFolderId)
+    }
 
     // Analysis filter
     if (analysisFilter === 'analyzed') {
@@ -183,7 +294,7 @@ export default function DashboardClient({ user }: { user: User }) {
     }
 
     return result
-  }, [recordings, analysisFilter, searchQuery, sortBy])
+  }, [recordings, selectedFolderId, analysisFilter, searchQuery, sortBy])
 
   // Pagination
   const totalPages = Math.ceil(processedRecordings.length / ITEMS_PER_PAGE)
@@ -213,6 +324,9 @@ export default function DashboardClient({ user }: { user: User }) {
     }
     setRecordings((prev) => [recordingWithUrl, ...prev])
     toast.success('Audio uploaded successfully!')
+    
+    // Switch to files tab to show the new recording
+    setMainTab('files')
   }
 
   const openDeleteModal = (recording: RecordingWithUrl) => {
@@ -276,6 +390,133 @@ export default function DashboardClient({ user }: { user: User }) {
     } catch (err) {
       console.error('Error archiving recording:', err)
       toast.error('Failed to update recording')
+    }
+  }
+
+  // Bulk actions
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(id)) {
+        newSet.delete(id)
+      } else {
+        newSet.add(id)
+      }
+      return newSet
+    })
+  }
+
+  const selectAll = () => {
+    if (selectedIds.size === paginatedRecordings.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(paginatedRecordings.map(r => r.id)))
+    }
+  }
+
+  const clearSelection = () => {
+    setSelectedIds(new Set())
+  }
+
+  const handleBulkDelete = async () => {
+    if (!supabase || selectedIds.size === 0) return
+    
+    if (!confirm(`Delete ${selectedIds.size} recording(s)? This cannot be undone.`)) return
+
+    setIsBulkDeleting(true)
+    try {
+      for (const id of selectedIds) {
+        const recording = recordings.find(r => r.id === id)
+        if (recording) {
+          await supabase.storage.from('audio-files').remove([recording.file_path])
+          await supabase.from('recordings').delete().eq('id', id)
+        }
+      }
+      
+      setRecordings(prev => prev.filter(r => !selectedIds.has(r.id)))
+      toast.success(`${selectedIds.size} recording(s) deleted`)
+      clearSelection()
+    } catch (err) {
+      console.error('Error bulk deleting:', err)
+      toast.error('Failed to delete some recordings')
+    } finally {
+      setIsBulkDeleting(false)
+    }
+  }
+
+  const handleBulkArchive = async (archive: boolean) => {
+    if (!supabase || selectedIds.size === 0) return
+
+    setIsBulkArchiving(true)
+    try {
+      for (const id of selectedIds) {
+        await supabase.from('recordings').update({ is_archived: archive }).eq('id', id)
+      }
+      
+      if ((filter === 'active' && archive) || (filter === 'archived' && !archive)) {
+        setRecordings(prev => prev.filter(r => !selectedIds.has(r.id)))
+      } else {
+        setRecordings(prev => prev.map(r => 
+          selectedIds.has(r.id) ? { ...r, is_archived: archive } : r
+        ))
+      }
+      
+      toast.success(`${selectedIds.size} recording(s) ${archive ? 'archived' : 'restored'}`)
+      clearSelection()
+    } catch (err) {
+      console.error('Error bulk archiving:', err)
+      toast.error('Failed to update some recordings')
+    } finally {
+      setIsBulkArchiving(false)
+    }
+  }
+
+  const handleBulkMoveToFolder = async (folderId: string | null) => {
+    if (!supabase || selectedIds.size === 0) return
+
+    console.log('Moving recordings to folder:', { folderId, selectedIds: Array.from(selectedIds) })
+
+    try {
+      let successCount = 0
+      let errorCount = 0
+      
+      for (const id of selectedIds) {
+        console.log(`Updating recording ${id} with folder_id:`, folderId)
+        
+        const { data, error } = await supabase
+          .from('recordings')
+          .update({ folder_id: folderId })
+          .eq('id', id)
+          .select()
+        
+        console.log(`Result for ${id}:`, { data, error })
+        
+        if (error) {
+          console.error(`Error moving recording ${id}:`, error)
+          errorCount++
+        } else {
+          successCount++
+        }
+      }
+      
+      if (successCount > 0) {
+        setRecordings(prev => prev.map(r => 
+          selectedIds.has(r.id) ? { ...r, folder_id: folderId } : r
+        ))
+        
+        const folderName = folderId ? folders.find(f => f.id === folderId)?.name : 'All Recordings'
+        toast.success(`${successCount} recording(s) moved to "${folderName}"`)
+      }
+      
+      if (errorCount > 0) {
+        toast.error(`Failed to move ${errorCount} recording(s). Check if migrations are applied.`)
+      }
+      
+      clearSelection()
+      setShowBulkMoveModal(false)
+    } catch (err) {
+      console.error('Error moving recordings:', err)
+      toast.error('Failed to move recordings. The folder_id column might not exist in the database.')
     }
   }
 
@@ -360,24 +601,66 @@ export default function DashboardClient({ user }: { user: User }) {
     return `${minutes}:${secs.toString().padStart(2, '0')}`
   }
 
-  const getStatusBadge = (status: string, isArchived?: boolean) => {
-    if (isArchived) {
+  const getStatusBadge = (recording: RecordingWithUrl) => {
+    const { status, is_archived, has_analysis, analysis_status } = recording
+    
+    // Archived takes priority
+    if (is_archived) {
       return (
         <span className="px-2 py-1 rounded-full text-xs font-medium bg-slate-500/20 text-slate-400">
           Archived
         </span>
       )
     }
-    const statusConfig = {
-      uploading: { bg: 'bg-blue-500/20', text: 'text-blue-400', label: 'Uploading' },
-      processing: { bg: 'bg-amber-500/20', text: 'text-amber-400', label: 'Processing' },
-      done: { bg: 'bg-emerald-500/20', text: 'text-emerald-400', label: 'Done' },
-      error: { bg: 'bg-red-500/20', text: 'text-red-400', label: 'Error' },
+    
+    // File upload status (only show if not done)
+    if (status === 'uploading') {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400">
+          Uploading
+        </span>
+      )
     }
-    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.error
+    
+    if (status === 'error') {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-500/20 text-red-400">
+          Error
+        </span>
+      )
+    }
+    
+    // Analysis status (if file upload is done)
+    if (analysis_status === 'processing') {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-400 animate-pulse">
+          🔄 Analyzing...
+        </span>
+      )
+    }
+    
+    // Has completed analysis
+    if (has_analysis) {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400">
+          ✨ Analyzed
+        </span>
+      )
+    }
+    
+    // File is ready but not analyzed
+    if (status === 'done') {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-slate-500/20 text-slate-400">
+          Ready
+        </span>
+      )
+    }
+    
+    // Default: processing file
     return (
-      <span className={`px-2 py-1 rounded-full text-xs font-medium ${config.bg} ${config.text}`}>
-        {config.label}
+      <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-400">
+        Processing
       </span>
     )
   }
@@ -427,95 +710,210 @@ export default function DashboardClient({ user }: { user: User }) {
       {/* Main Content */}
       <main className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Welcome Section */}
-        <div className="mb-8">
+        <div className="mb-6">
           <h1 className="text-3xl font-bold text-white">Welcome back!</h1>
           <p className="text-slate-400 mt-1">
             Record your calls and meetings to improve your coaching
           </p>
         </div>
 
-        {/* Record/Upload Section - Recording is Primary */}
-        <div className="mb-12">
-          <div className="bg-gradient-to-br from-slate-800/70 to-slate-900/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 overflow-hidden">
-            {/* Header with emphasis on recording */}
-            <div className="bg-gradient-to-r from-red-500/10 via-slate-800/50 to-amber-500/10 border-b border-slate-700/50 px-6 py-4">
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500/30 to-rose-500/30 flex items-center justify-center">
-                    <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                      <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-semibold text-white">Capture Audio</h2>
-                    <p className="text-slate-400 text-sm">Record calls, meetings, or upload existing files</p>
-                  </div>
-                </div>
-
-                {/* Tabs - Record first, more prominent */}
-                <div className="flex items-center bg-slate-900/50 rounded-xl p-1 border border-slate-700/50">
-                  <button
-                    onClick={() => setInputMode('record')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      inputMode === 'record'
-                        ? 'bg-gradient-to-r from-red-500 to-rose-500 text-white shadow-lg shadow-red-500/25'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                      <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-                    </svg>
-                    Record
-                    {inputMode === 'record' && (
-                      <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setInputMode('upload')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      inputMode === 'upload'
-                        ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-amber-500/25'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
-                    Upload
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Content */}
-            <div className="p-6">
-              {inputMode === 'record' ? (
-                <AudioRecorder onRecordingComplete={handleUploadComplete} />
-              ) : (
-                <AudioUploader onUploadComplete={handleUploadComplete} />
+        {/* Main Tabs */}
+        <div className="mb-8">
+          <div className="flex items-center gap-2 p-1.5 bg-slate-800/50 rounded-2xl border border-slate-700/50 w-fit">
+            <button
+              onClick={() => setMainTab('capture')}
+              className={`flex items-center gap-2.5 px-5 py-3 rounded-xl text-sm font-medium transition-all ${
+                mainTab === 'capture'
+                  ? 'bg-gradient-to-r from-red-500 to-rose-500 text-white shadow-lg shadow-red-500/20'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+              }`}
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
+              Record & Upload
+              {mainTab === 'capture' && (
+                <span className="w-2 h-2 rounded-full bg-white/80 animate-pulse" />
               )}
-            </div>
+            </button>
+            <button
+              onClick={() => setMainTab('files')}
+              className={`flex items-center gap-2.5 px-5 py-3 rounded-xl text-sm font-medium transition-all ${
+                mainTab === 'files'
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-amber-500/20'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+              }`}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              My Recordings
+              {recordings.length > 0 && (
+                <span className="px-2 py-0.5 text-xs rounded-full bg-white/20">
+                  {recordings.length}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
-        {/* Recordings Section */}
-        <div>
-          {/* Header with filters */}
-          <div className="flex flex-col gap-4 mb-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <h2 className="text-xl font-semibold text-white">Your Recordings</h2>
-              <button
-                onClick={loadRecordings}
-                className="p-2 text-slate-400 hover:text-white transition-colors self-end sm:self-auto"
-                title="Refresh"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </button>
+        {/* Tab Content */}
+        {mainTab === 'capture' && (
+          <>
+            {/* Record/Upload Section */}
+            <div className="bg-gradient-to-br from-slate-800/70 to-slate-900/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 overflow-hidden">
+              {/* Mode Toggle - Record/Upload */}
+              <div className="border-b border-slate-700/50 px-4 py-3 bg-slate-800/30">
+                <div className="flex items-center justify-center gap-2">
+                  <div className="flex items-center bg-slate-900/50 rounded-xl p-1 border border-slate-700/50">
+                    <button
+                      onClick={() => setInputMode('record')}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                        inputMode === 'record'
+                          ? 'bg-gradient-to-r from-red-500 to-rose-500 text-white shadow-lg shadow-red-500/25'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                      </svg>
+                      Record
+                      {inputMode === 'record' && (
+                        <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setInputMode('upload')}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                        inputMode === 'upload'
+                          ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-amber-500/25'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      Upload File
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="p-6">
+                {inputMode === 'record' ? (
+                  <AudioRecorder onRecordingComplete={handleUploadComplete} />
+                ) : (
+                  <AudioUploader onUploadComplete={handleUploadComplete} />
+                )}
+              </div>
             </div>
+
+            {/* Recent recordings preview */}
+            {recordings.length > 0 && (
+              <div className="mt-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-medium text-white">Recent Recordings</h3>
+                  <button
+                    onClick={() => setMainTab('files')}
+                    className="text-sm text-amber-400 hover:text-amber-300 transition-colors flex items-center gap-1"
+                  >
+                    View all ({recordings.length})
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+                <div className="grid gap-2">
+                  {recordings.slice(0, 3).map((recording) => (
+                    <Link
+                      key={recording.id}
+                      href={`/dashboard/recordings/${recording.id}`}
+                      className="flex items-center gap-3 p-3 bg-slate-800/30 rounded-xl border border-slate-700/30 hover:bg-slate-800/50 hover:border-amber-500/30 transition-all"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center flex-shrink-0">
+                        <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white font-medium truncate">{recording.file_name}</p>
+                        <p className="text-xs text-slate-400">
+                          {formatDuration(recording.duration)} • {formatDate(recording.created_at)}
+                        </p>
+                      </div>
+                      {recording.has_analysis && (
+                        <span className="px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-400 rounded-full">
+                          ✨ Analyzed
+                        </span>
+                      )}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Files Tab Content */}
+        {mainTab === 'files' && (
+          <div className="flex gap-6">
+          {/* Folders Sidebar */}
+          {showSidebar && (
+            <aside className="w-64 flex-shrink-0 hidden lg:block">
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-4 sticky top-24">
+                <h3 className="text-sm font-medium text-slate-400 mb-3 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  Folders
+                </h3>
+                <FolderManager
+                  userId={user.id}
+                  selectedFolderId={selectedFolderId}
+                  onFolderChange={setSelectedFolderId}
+                  recordingCount={folderCounts}
+                />
+              </div>
+            </aside>
+          )}
+
+          {/* Main Content */}
+          <div className="flex-1 min-w-0">
+            {/* Header with filters */}
+            <div className="flex flex-col gap-4 mb-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  {/* Mobile folder toggle */}
+                  <button
+                    onClick={() => setShowSidebar(!showSidebar)}
+                    className="lg:hidden p-2 text-slate-400 hover:text-white transition-colors"
+                    title="Toggle folders"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                  </button>
+                  <h2 className="text-xl font-semibold text-white">
+                    {selectedFolderId 
+                      ? folders.find(f => f.id === selectedFolderId)?.name || 'Recordings'
+                      : 'All Recordings'
+                    }
+                  </h2>
+                </div>
+                <button
+                  onClick={loadRecordings}
+                  className="p-2 text-slate-400 hover:text-white transition-colors self-end sm:self-auto"
+                  title="Refresh"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+              </div>
             
             {/* Filter Pills */}
             <div className="flex flex-wrap items-center gap-3">
@@ -633,6 +1031,79 @@ export default function DashboardClient({ user }: { user: User }) {
             </div>
           </div>
 
+          {/* Bulk Actions Bar */}
+          {selectedIds.size > 0 && (
+            <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/30 rounded-xl p-3 mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={selectAll}
+                  className="flex items-center gap-2 text-sm text-amber-400 hover:text-amber-300 transition-colors"
+                >
+                  <div className={`w-4 h-4 rounded border-2 border-amber-400 flex items-center justify-center ${
+                    selectedIds.size === paginatedRecordings.length ? 'bg-amber-400' : ''
+                  }`}>
+                    {selectedIds.size === paginatedRecordings.length && (
+                      <svg className="w-3 h-3 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  {selectedIds.size === paginatedRecordings.length ? 'Deselect all' : 'Select all'}
+                </button>
+                <span className="text-amber-400 font-medium">
+                  {selectedIds.size} selected
+                </span>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                {/* Move to folder */}
+                <button
+                  onClick={() => setShowBulkMoveModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/50 text-slate-300 rounded-lg text-sm hover:bg-slate-600 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  Move
+                </button>
+                
+                {/* Archive/Restore */}
+                <button
+                  onClick={() => handleBulkArchive(filter !== 'archived')}
+                  disabled={isBulkArchiving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/50 text-slate-300 rounded-lg text-sm hover:bg-slate-600 disabled:opacity-50 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                  </svg>
+                  {isBulkArchiving ? '...' : filter === 'archived' ? 'Restore' : 'Archive'}
+                </button>
+                
+                {/* Delete */}
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={isBulkDeleting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 text-red-400 rounded-lg text-sm hover:bg-red-500/30 disabled:opacity-50 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  {isBulkDeleting ? '...' : 'Delete'}
+                </button>
+                
+                {/* Cancel */}
+                <button
+                  onClick={clearSelection}
+                  className="p-1.5 text-slate-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Results count */}
           {(searchQuery || analysisFilter !== 'all') && (
             <p className="text-slate-400 text-sm mb-4">
@@ -676,12 +1147,30 @@ export default function DashboardClient({ user }: { user: User }) {
                 {paginatedRecordings.map((recording) => (
                   <div
                     key={recording.id}
-                    className={`bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 hover:border-amber-500/30 hover:bg-slate-800/70 transition-all ${
-                      recording.is_archived ? 'opacity-60' : ''
-                    }`}
+                    className={`bg-slate-800/50 backdrop-blur-sm rounded-xl border transition-all ${
+                      selectedIds.has(recording.id) 
+                        ? 'border-amber-500/50 bg-amber-500/5' 
+                        : 'border-slate-700/50 hover:border-amber-500/30 hover:bg-slate-800/70'
+                    } ${recording.is_archived ? 'opacity-60' : ''}`}
                   >
                     <div className="p-4">
                       <div className="flex items-center gap-4">
+                        {/* Selection checkbox */}
+                        <button
+                          onClick={() => toggleSelection(recording.id)}
+                          className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
+                            selectedIds.has(recording.id)
+                              ? 'bg-amber-500 border-amber-500'
+                              : 'border-slate-600 hover:border-amber-500'
+                          }`}
+                        >
+                          {selectedIds.has(recording.id) && (
+                            <svg className="w-3 h-3 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </button>
+                        
                         <div 
                           className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center cursor-pointer hover:from-amber-500/30 hover:to-orange-500/30 transition-colors"
                           onClick={() => setExpandedPlayer(expandedPlayer === recording.id ? null : recording.id)}
@@ -733,17 +1222,7 @@ export default function DashboardClient({ user }: { user: User }) {
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                               </svg>
                             )}
-                            {getStatusBadge(recording.status, recording.is_archived)}
-                            {recording.has_analysis && (
-                              <span className="px-2 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400">
-                                ✨ Analyzed
-                              </span>
-                            )}
-                            {recording.has_transcript && !recording.has_analysis && (
-                              <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400">
-                                Transcribed
-                              </span>
-                            )}
+                            {getStatusBadge(recording)}
                           </div>
                           <Link href={`/dashboard/recordings/${recording.id}`}>
                             <p className="text-slate-400 text-sm hover:text-slate-300 transition-colors">
@@ -875,7 +1354,9 @@ export default function DashboardClient({ user }: { user: User }) {
               )}
             </>
           )}
+          </div>
         </div>
+        )}
       </main>
 
       {/* Delete Confirmation Modal */}
@@ -890,6 +1371,51 @@ export default function DashboardClient({ user }: { user: User }) {
         variant="danger"
         loading={isDeleting}
       />
+
+      {/* Bulk Move to Folder Modal */}
+      {showBulkMoveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-800 rounded-2xl border border-slate-700 p-6 max-w-md w-full mx-4 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-4">
+              Move {selectedIds.size} recording(s) to folder
+            </h3>
+            
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              <button
+                onClick={() => handleBulkMoveToFolder(null)}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left rounded-lg hover:bg-slate-700 transition-colors"
+              >
+                <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+                <span className="text-white">All Recordings</span>
+              </button>
+              
+              {folders.map(folder => (
+                <button
+                  key={folder.id}
+                  onClick={() => handleBulkMoveToFolder(folder.id)}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left rounded-lg hover:bg-slate-700 transition-colors"
+                >
+                  <svg className="w-5 h-5" style={{ color: folder.color }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span className="text-white">{folder.name}</span>
+                </button>
+              ))}
+            </div>
+            
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setShowBulkMoveModal(false)}
+                className="px-4 py-2 text-slate-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -5,6 +5,7 @@ import { AudioAnalysis, TimelineSegment, GlossaryTerm, AnalysisInsight } from '@
 
 interface AnalysisDisplayProps {
   analysis: AudioAnalysis
+  onSeek?: (timestamp: string) => void // Called when user clicks a timestamp
 }
 
 // Helper to strip markdown formatting
@@ -17,7 +18,7 @@ const cleanMarkdown = (text: string): string => {
     .trim()
 }
 
-export default function AnalysisDisplay({ analysis }: AnalysisDisplayProps) {
+export default function AnalysisDisplay({ analysis, onSeek }: AnalysisDisplayProps) {
   const [activeTab, setActiveTab] = useState<'timeline' | 'transcript' | 'notes' | 'glossary' | 'insights'>('notes')
   const [expandedTimeline, setExpandedTimeline] = useState<number | null>(0)
   const [expandedGlossary, setExpandedGlossary] = useState<string | null>(null)
@@ -295,9 +296,13 @@ export default function AnalysisDisplay({ analysis }: AnalysisDisplayProps) {
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 mb-1">
-                            <span className="text-sm font-mono text-purple-400">
-                              {segment.start_time} - {segment.end_time}
-                            </span>
+                            <button
+                              onClick={() => onSeek?.(segment.start_time)}
+                              className="text-sm font-mono text-purple-400 hover:text-purple-300 hover:underline cursor-pointer transition-colors"
+                              title="Click to play from this point"
+                            >
+                              ▶ {segment.start_time} - {segment.end_time}
+                            </button>
                           </div>
                           <h4 className="text-white font-medium">{segment.title}</h4>
                           
@@ -404,9 +409,13 @@ export default function AnalysisDisplay({ analysis }: AnalysisDisplayProps) {
                             }}
                             className="flex items-center gap-3 p-2 text-left rounded-lg hover:bg-slate-700/50 transition-colors group"
                           >
-                            <span className="text-xs font-mono px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded flex-shrink-0">
-                              {section.timestamp}
-                            </span>
+                            <button
+                              onClick={() => onSeek?.(section.timestamp)}
+                              className="text-xs font-mono px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded flex-shrink-0 hover:bg-purple-500/30 hover:text-purple-300 transition-colors cursor-pointer"
+                              title="Click to play from this point"
+                            >
+                              ▶ {section.timestamp}
+                            </button>
                             <span className="text-sm text-slate-300 group-hover:text-white truncate">
                               {cleanMarkdown(section.title)}
                             </span>
@@ -453,9 +462,13 @@ export default function AnalysisDisplay({ analysis }: AnalysisDisplayProps) {
                               <header className="mb-4">
                                 <div className="flex items-center gap-3 mb-2">
                                   {timestamp && (
-                                    <span className="text-xs font-mono px-2 py-1 bg-purple-500/20 text-purple-400 rounded">
-                                      {timestamp}
-                                    </span>
+                                    <button
+                                      onClick={() => onSeek?.(timestamp)}
+                                      className="text-xs font-mono px-2 py-1 bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 hover:text-purple-300 transition-colors cursor-pointer"
+                                      title="Click to play from this point"
+                                    >
+                                      ▶ {timestamp}
+                                    </button>
                                   )}
                                 </div>
                                 {title && (

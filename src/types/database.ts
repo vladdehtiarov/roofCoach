@@ -4,6 +4,72 @@ export type UserRole = 'user' | 'admin'
 
 export type RecordingStatus = 'uploading' | 'processing' | 'done' | 'error'
 
+// Folder for organizing recordings
+export interface Folder {
+  id: string
+  user_id: string
+  name: string
+  color: string
+  icon: string
+  parent_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Tag for labeling recordings
+export interface Tag {
+  id: string
+  user_id: string
+  name: string
+  color: string
+  created_at: string
+}
+
+// Many-to-many: recording <-> tag
+export interface RecordingTag {
+  id: string
+  recording_id: string
+  tag_id: string
+  created_at: string
+}
+
+// Bookmark for marking important moments
+export interface Bookmark {
+  id: string
+  recording_id: string
+  user_id: string
+  timestamp_seconds: number
+  title: string
+  note: string | null
+  color: string
+  created_at: string
+  updated_at: string
+}
+
+// Comment on a recording
+export interface Comment {
+  id: string
+  recording_id: string
+  user_id: string
+  parent_id: string | null
+  content: string
+  timestamp_seconds: number | null
+  created_at: string
+  updated_at: string
+}
+
+// Shared recording link
+export interface SharedRecording {
+  id: string
+  recording_id: string
+  shared_by: string
+  shared_with: string | null
+  share_token: string | null
+  permissions: 'view' | 'comment' | 'edit'
+  expires_at: string | null
+  created_at: string
+}
+
 export interface Profile {
   id: string
   email: string
@@ -23,6 +89,7 @@ export interface Recording {
   duration: number | null
   status: RecordingStatus
   is_archived: boolean
+  folder_id: string | null // Reference to folder
   created_at: string
   updated_at: string
 }
@@ -193,6 +260,48 @@ export interface RecordingInsert {
   duration?: number | null
   status?: RecordingStatus
   is_archived?: boolean
+  folder_id?: string | null
+}
+
+// Insert types for new tables
+export interface FolderInsert {
+  user_id: string
+  name: string
+  color?: string
+  icon?: string
+  parent_id?: string | null
+}
+
+export interface TagInsert {
+  user_id: string
+  name: string
+  color?: string
+}
+
+export interface BookmarkInsert {
+  recording_id: string
+  user_id: string
+  timestamp_seconds: number
+  title: string
+  note?: string | null
+  color?: string
+}
+
+export interface CommentInsert {
+  recording_id: string
+  user_id: string
+  parent_id?: string | null
+  content: string
+  timestamp_seconds?: number | null
+}
+
+export interface SharedRecordingInsert {
+  recording_id: string
+  shared_by: string
+  shared_with?: string | null
+  share_token?: string | null
+  permissions?: 'view' | 'comment' | 'edit'
+  expires_at?: string | null
 }
 
 export interface TranscriptInsert {
