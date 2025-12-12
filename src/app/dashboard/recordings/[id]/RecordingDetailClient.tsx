@@ -37,8 +37,13 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
   const [isSavingName, setIsSavingName] = useState(false)
   
   // Progress tracking
-  const [analysisProgress, setAnalysisProgress] = useState({
-    status: initialAnalysis?.processing_status || 'pending',
+  const [analysisProgress, setAnalysisProgress] = useState<{
+    status: 'pending' | 'processing' | 'done' | 'error' | 'queued'
+    totalChunks: number
+    completedChunks: number
+    message: string
+  }>({
+    status: (initialAnalysis?.processing_status as 'pending' | 'processing' | 'done' | 'error') || 'pending',
     totalChunks: initialAnalysis?.total_chunks || 0,
     completedChunks: initialAnalysis?.completed_chunks || 0,
     message: initialAnalysis?.current_chunk_message || '',
@@ -109,7 +114,7 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
 
   // Polling fallback for when realtime doesn't work
   useEffect(() => {
-    if (currentStatus === 'processing' || analysisProgress.status === 'processing') {
+    if (currentStatus === 'processing' || analysisProgress.status === 'processing' || analysisProgress.status === 'queued') {
       const interval = setInterval(checkStatus, 10000)
       return () => clearInterval(interval)
     }
@@ -209,12 +214,28 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
         }),
       })
 
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.message || 'Failed to start analysis')
+      const result = await response.json()
+
+      // Handle queue response (503 - server busy)
+      if (response.status === 503 && result.queued) {
+        setAnalysisProgress({
+          status: 'queued',
+          totalChunks: 0,
+          completedChunks: 0,
+          message: `Server busy (${result.activeCount}/${result.maxConcurrent} analyses running). Retrying in 60 seconds...`,
+        })
+        toast.warning(`Server is processing other files. Your analysis will start automatically in ~1 minute.`)
+        
+        // Auto-retry after delay
+        setTimeout(() => {
+          handleStartAnalysis()
+        }, (result.retryAfterSeconds || 60) * 1000)
+        return
       }
 
-      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to start analysis')
+      }
       
       // Update progress from response
       setAnalysisProgress({
@@ -638,6 +659,36 @@ export default function RecordingDetailClient({ recording, transcript: initialTr
         {/* Analysis Section */}
         {analysis && analysis.processing_status === 'done' ? (
           <AnalysisDisplay analysis={analysis} />
+        ) : analysisProgress.status === 'queued' ? (
+          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
+            <div className="text-center py-8">
+              {/* Queue Status */}
+              <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center mb-6">
+                <svg className="w-10 h-10 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-medium text-white mb-2">⏳ Waiting in queue...</h3>
+              <p className="text-slate-400 mb-6">{analysisProgress.message || 'Server is busy. Your analysis will start automatically soon.'}</p>
+              
+              <div className="max-w-md mx-auto">
+                <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className="flex-shrink-0">
+                      <svg className="animate-spin w-5 h-5 text-amber-400" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    </div>
+                    <div className="text-left">
+                      <p className="text-amber-400 font-medium text-sm">Auto-retry enabled</p>
+                      <p className="text-slate-400 text-xs">Will start automatically when server is free</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         ) : (currentStatus === 'processing' || analysisProgress.status === 'processing' || (analysis && analysis.processing_status === 'processing')) ? (
           <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-6">
             <div className="text-center py-8">

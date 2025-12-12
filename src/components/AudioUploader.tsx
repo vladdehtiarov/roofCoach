@@ -144,10 +144,54 @@ export default function AudioUploader({
     return null
   }
 
-  // Estimate compressed size (roughly 85% smaller for speech audio)
+  // Target max size after compression (25MB to fit in 512MB RAM on backend)
+  // 25MB file → ~75MB in memory (base64 + processing) → safe with ~150MB baseline
+  const TARGET_COMPRESSED_SIZE = 25 * 1024 * 1024 // 25MB
+  
+  // Estimate duration from file size (rough: 1MB ≈ 1 minute for typical audio)
+  const estimateDurationSeconds = (fileSize: number): number => {
+    // Most audio formats: ~1MB per minute on average
+    return (fileSize / (1024 * 1024)) * 60
+  }
+  
+  // Calculate optimal bitrate to achieve target size
+  const calculateOptimalBitrate = (fileSizeBytes: number): { bitrate: string; sampleRate: string } => {
+    const estimatedDuration = estimateDurationSeconds(fileSizeBytes)
+    // Target bits = targetSize * 8, then divide by duration
+    const targetBits = TARGET_COMPRESSED_SIZE * 8
+    const optimalBitrate = Math.floor(targetBits / estimatedDuration)
+    
+    // Clamp bitrate between 16k (minimum for understandable speech) and 48k (good quality)
+    // Lower bitrates for long files to ensure they fit in 25MB target
+    let bitrate: number
+    let sampleRate: string
+    
+    if (optimalBitrate >= 48000) {
+      bitrate = 48
+      sampleRate = '16000'
+    } else if (optimalBitrate >= 32000) {
+      bitrate = 32
+      sampleRate = '16000'
+    } else if (optimalBitrate >= 24000) {
+      bitrate = 24
+      sampleRate = '12000'
+    } else {
+      // Very long files (4+ hours) - use minimum quality
+      bitrate = 16
+      sampleRate = '8000' // Telephone quality, but still understandable
+    }
+    
+    console.log(`File: ${formatFileSize(fileSizeBytes)}, Est. duration: ${Math.round(estimatedDuration/60)}min, Optimal bitrate: ${bitrate}k`)
+    return { bitrate: `${bitrate}k`, sampleRate }
+  }
+
+  // Estimate compressed size based on calculated bitrate
   const estimateCompressedSize = (originalSize: number): number => {
-    // Compression typically achieves 6-8x reduction for speech audio
-    return Math.round(originalSize / 6)
+    const { bitrate } = calculateOptimalBitrate(originalSize)
+    const bitrateNum = parseInt(bitrate) * 1000 // Convert "32k" to 32000
+    const durationSec = estimateDurationSeconds(originalSize)
+    // Compressed size = bitrate (bits/sec) * duration (sec) / 8 (bits to bytes)
+    return Math.round((bitrateNum * durationSec) / 8)
   }
 
   // Compress audio file using FFmpeg (with browser conversion for WebM/OGG)
@@ -210,9 +254,14 @@ export default function AudioUploader({
         console.log('FFmpeg:', message)
       })
       
-      // Compress: mono, 16kHz, 64kbps - optimized for speech
+      // Calculate optimal bitrate for target ~40MB output
+      const { bitrate, sampleRate } = calculateOptimalBitrate(file.size)
+      
+      // Compress: mono, dynamic bitrate - optimized for speech + target size
       // Use -vn to ignore video streams (for webm files that might have video)
-      setCompression(prev => ({ ...prev, progress: 15, message: 'Compressing audio...' }))
+      setCompression(prev => ({ ...prev, progress: 15, message: `Compressing at ${bitrate}bps...` }))
+      
+      console.log(`Compression settings: bitrate=${bitrate}, sampleRate=${sampleRate}`)
       
       // Try different compression approaches based on input format
       let execResult: number
@@ -225,8 +274,8 @@ export default function AudioUploader({
           '-vn',             // No video
           '-acodec', 'libmp3lame',  // Use MP3 encoder
           '-ac', '1',        // Mono
-          '-ar', '22050',    // 22kHz (more compatible)
-          '-b:a', '64k',     // 64kbps
+          '-ar', sampleRate, // Dynamic sample rate
+          '-b:a', bitrate,   // Dynamic bitrate
           '-y',
           outputFileName
         ])
@@ -238,7 +287,8 @@ export default function AudioUploader({
             '-i', inputFileName,
             '-vn',
             '-ac', '1',
-            '-ar', '16000',
+            '-ar', sampleRate,
+            '-b:a', bitrate,
             '-y',
             outputFileName
           ])
@@ -249,8 +299,8 @@ export default function AudioUploader({
           '-i', inputFileName,
           '-vn',             // Ignore video stream
           '-ac', '1',        // Mono
-          '-ar', '16000',    // 16kHz sample rate
-          '-b:a', '64k',     // 64kbps bitrate
+          '-ar', sampleRate, // Dynamic sample rate
+          '-b:a', bitrate,   // Dynamic bitrate
           '-y',              // Overwrite output
           outputFileName
         ])

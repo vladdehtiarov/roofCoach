@@ -11,6 +11,7 @@ export const maxDuration = 900
 const CHUNK_DURATION_MINUTES = 30 // Request transcript in 30-minute chunks
 const RATE_LIMIT_DELAY_MS = 20000 // 20 seconds between requests (Gemini has 250K tokens/min limit)
 const MODEL_NAME = 'gemini-2.0-flash-exp'
+const MAX_CONCURRENT_ANALYSES = 2 // Maximum simultaneous analyses to prevent memory overload
 
 // Gemini pricing (per 1M tokens) - approximate for cost estimation
 const GEMINI_PRICING = {
@@ -77,6 +78,34 @@ export async function POST(request: Request) {
 
     if (recordingError || !recording) {
       return NextResponse.json({ message: 'Recording not found' }, { status: 404 })
+    }
+
+    // Check queue - limit concurrent analyses to prevent memory overload
+    const { data: activeAnalyses, error: queueError } = await supabase
+      .from('audio_analyses')
+      .select('id, recording_id, created_at')
+      .eq('processing_status', 'processing')
+      .order('created_at', { ascending: true })
+
+    if (!queueError && activeAnalyses && activeAnalyses.length >= MAX_CONCURRENT_ANALYSES) {
+      // Check if this recording is already in queue
+      const isAlreadyProcessing = activeAnalyses.some(a => a.recording_id === recordingId)
+      if (isAlreadyProcessing) {
+        return NextResponse.json({ message: 'Analysis already in progress' }, { status: 400 })
+      }
+
+      // Calculate queue position
+      const queuePosition = activeAnalyses.length - MAX_CONCURRENT_ANALYSES + 1
+      console.log(`Queue full (${activeAnalyses.length}/${MAX_CONCURRENT_ANALYSES}). Recording ${recordingId} must wait.`)
+      
+      return NextResponse.json({ 
+        message: 'Server is busy processing other files. Please try again in a few minutes.',
+        queued: true,
+        queuePosition: queuePosition + 1,
+        activeCount: activeAnalyses.length,
+        maxConcurrent: MAX_CONCURRENT_ANALYSES,
+        retryAfterSeconds: 60
+      }, { status: 503 })
     }
 
     // Check for existing analysis
@@ -226,7 +255,7 @@ async function processWithChat(params: {
   if (!supabase) return
 
   try {
-    // Download audio file
+    // Download audio file 
     console.log('Downloading audio...')
     await updateProgress(supabase, analysisId, 0, 'Downloading audio file...')
 
@@ -238,15 +267,18 @@ async function processWithChat(params: {
       throw new Error('Failed to download audio')
     }
 
+    // Convert to base64 - minimize memory copies
     const arrayBuffer = await audioData.arrayBuffer()
     const base64Audio = Buffer.from(arrayBuffer).toString('base64')
     
+    // Determine mime type
     let mimeType = 'audio/webm'
-    if (filePath.endsWith('.mp3')) mimeType = 'audio/mp3'
+    if (filePath.endsWith('.mp3')) mimeType = 'audio/mpeg'
     else if (filePath.endsWith('.wav')) mimeType = 'audio/wav'
     else if (filePath.endsWith('.m4a')) mimeType = 'audio/mp4'
+    else if (filePath.endsWith('.ogg')) mimeType = 'audio/ogg'
 
-    console.log(`Audio loaded: ${(base64Audio.length / 1024 / 1024).toFixed(1)}MB`)
+    console.log(`Audio loaded: ${(base64Audio.length / 1024 / 1024).toFixed(1)}MB (base64)`)
     await updateProgress(supabase, analysisId, 0, 'Starting Gemini chat...')
 
     // Initialize Gemini Chat
