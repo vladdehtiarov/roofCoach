@@ -34,7 +34,7 @@ export default function RootLayout({
           <Suspense fallback={null}>
             <NavigationProgress />
           </Suspense>
-          {children}
+        {children}
         </Providers>
       </body>
     </html>

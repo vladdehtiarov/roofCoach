@@ -136,14 +136,85 @@ export interface TranscriptSection {
 
 export type AnalysisStatus = 'pending' | 'processing' | 'done' | 'error'
 
+// ============================================================================
+// SALES COACHING TYPES (Siro-like structure)
+// ============================================================================
+
+export interface ScorecardItem {
+  name: string
+  score: number
+  timestamp?: string
+  notes?: string
+}
+
+export interface ScorecardCategory {
+  score: number
+  weight: number
+  items: ScorecardItem[]
+}
+
+export interface Scorecard {
+  total: number
+  process: ScorecardCategory
+  skills: ScorecardCategory
+  communication: ScorecardCategory
+}
+
+export interface InsightWithTimestamps {
+  text: string
+  timestamps: string[]
+  type?: 'price' | 'timing' | 'trust' | 'other'
+}
+
+export interface CustomerAnalysis {
+  needs_motivation: InsightWithTimestamps[]
+  pain_points: InsightWithTimestamps[]
+  objections: InsightWithTimestamps[]
+  outcomes_next_steps: InsightWithTimestamps[]
+}
+
+export interface SpeakerAnalytics {
+  conversation_time: string
+  rep_speaking_time: string
+  customer_speaking_time: string
+  speaker_share_rep: number
+  pacing_wpm: number
+  questions_asked: number
+  questions_received: number
+  longest_monologue: string
+  exchanges: number
+}
+
+export interface ReEngage {
+  recap: string
+  first_price_quote: string
+  final_price_quote: string
+  financing: string
+  commitment: string
+  main_objection: string
+  emotional_tie: string
+  recommended_action: string
+  suggested_message: string
+}
+
+export interface TranscriptEntry {
+  speaker: 'Rep' | 'Customer' | string
+  text: string
+  timestamp: string
+}
+
+// ============================================================================
+// AUDIO ANALYSIS (Main interface)
+// ============================================================================
+
 export interface AudioAnalysis {
   id: string
   recording_id: string
   
-  // Full transcript (combined from all sections)
+  // Full transcript (JSON string of TranscriptEntry[])
   transcript: string
   
-  // Chunked sections with progress
+  // Chunked sections with progress (legacy)
   sections: TranscriptSection[]
   processing_status: AnalysisStatus
   total_chunks: number
@@ -152,31 +223,39 @@ export interface AudioAnalysis {
   error_message: string | null
   
   // Headlines/Summary
-  title: string                    // AI-generated title for the recording
-  summary: string                  // Brief overview
+  title: string
+  summary: string
   
-  // AI Notes - markdown formatted article
-  ai_notes: string | null          // Beautiful markdown article with analysis
+  // AI Notes - markdown formatted article (legacy)
+  ai_notes: string | null
   
-  // Timeline with topics
+  // Timeline with topics (legacy)
   timeline: TimelineSegment[]
   
   // Key topics discussed
   main_topics: string[]
   
-  // Glossary of terms
+  // Glossary of terms (legacy)
   glossary: GlossaryTerm[]
   
-  // AI Insights & Recommendations
+  // AI Insights & Recommendations (legacy)
   insights: AnalysisInsight[]
   
-  // Conclusion
+  // Conclusion (legacy)
   conclusion: string
   
+  // ============================================
+  // NEW: Sales Coaching Fields (Siro-like)
+  // ============================================
+  scorecard: Scorecard | null
+  customer_analysis: CustomerAnalysis | null
+  speaker_analytics: SpeakerAnalytics | null
+  re_engage: ReEngage | null
+  
   // Metadata
-  duration_analyzed: number | null // seconds
-  language: string                 // "en", "uk"
-  confidence_score: number         // 0-1
+  duration_analyzed: number | null
+  language: string
+  confidence_score: number
   
   // Token usage tracking
   input_tokens: number

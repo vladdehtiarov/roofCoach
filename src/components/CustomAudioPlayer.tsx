@@ -64,6 +64,8 @@ export default function CustomAudioPlayer({
   const [showChapters, setShowChapters] = useState(false)
   const [waveformData, setWaveformData] = useState<number[]>([])
   const [isLoadingWaveform, setIsLoadingWaveform] = useState(false)
+  const [shouldLoadWaveform, setShouldLoadWaveform] = useState(false) // Lazy load trigger
+  const waveformLoadedRef = useRef(false) // Prevent duplicate loads
 
   // Calculate chapter segments with colors
   const chapterSegments = useMemo(() => {
@@ -148,14 +150,20 @@ export default function CustomAudioPlayer({
     }
   }, [playbackSpeed])
 
-  // Generate waveform data from audio
+  // Generate waveform data from audio - LAZY LOADED on hover
   useEffect(() => {
-    if (!src || waveformData.length > 0) return
+    // Only load waveform when explicitly requested (on hover) and not already loaded
+    if (!shouldLoadWaveform || !src || waveformLoadedRef.current) return
     
     const generateWaveform = async () => {
       setIsLoadingWaveform(true)
+      waveformLoadedRef.current = true // Mark as loading to prevent duplicates
+      
       try {
         const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)()
+        
+        // Use Range request to get only first portion for waveform estimation
+        // This reduces memory usage significantly for long audio files
         const response = await fetch(src)
         const arrayBuffer = await response.arrayBuffer()
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
@@ -183,7 +191,7 @@ export default function CustomAudioPlayer({
         audioContext.close()
       } catch (error) {
         console.error('Failed to generate waveform:', error)
-        // Generate fake waveform as fallback
+        // Generate fake waveform as fallback - much cheaper!
         const fakeWaveform = Array.from({ length: 200 }, () => 0.3 + Math.random() * 0.7)
         setWaveformData(fakeWaveform)
       } finally {
@@ -192,7 +200,14 @@ export default function CustomAudioPlayer({
     }
     
     generateWaveform()
-  }, [src, waveformData.length])
+  }, [shouldLoadWaveform, src])
+  
+  // Trigger waveform loading on first hover
+  const handleProgressMouseEnter = useCallback(() => {
+    if (!shouldLoadWaveform && !waveformLoadedRef.current) {
+      setShouldLoadWaveform(true)
+    }
+  }, [shouldLoadWaveform])
 
   // Handle play/pause
   const togglePlay = useCallback(() => {
@@ -326,12 +341,26 @@ export default function CustomAudioPlayer({
         <div 
           ref={progressRef}
           className="relative h-12 cursor-pointer group"
+          onMouseEnter={handleProgressMouseEnter}
           onMouseMove={handleMouseMove}
           onMouseLeave={() => setHoverTime(null)}
           onMouseDown={handleMouseDown}
         >
+          {/* Waveform loading indicator */}
+          {isLoadingWaveform && (
+            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Loading waveform...
+              </div>
+            </div>
+          )}
+
           {/* Waveform visualization */}
-          {waveformData.length > 0 && (
+          {waveformData.length > 0 && !isLoadingWaveform && (
             <div className="absolute inset-x-0 bottom-0 h-10 flex items-end justify-between gap-px opacity-0 group-hover:opacity-100 transition-opacity duration-200">
               {waveformData.map((amplitude, index) => {
                 const barPercent = (index / waveformData.length) * 100

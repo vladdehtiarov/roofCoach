@@ -74,41 +74,55 @@ export default function AudioUploader({
     }
   }, [])
 
-  // Load FFmpeg on mount
-  useEffect(() => {
-    const loadFFmpeg = async () => {
-      if (ffmpegRef.current && ffmpegLoaded) return
+  // Load FFmpeg LAZILY - only when needed
+  const loadFFmpegIfNeeded = useCallback(async () => {
+    if (ffmpegRef.current && ffmpegLoaded) return true
+    
+    try {
+      const ffmpeg = new FFmpeg()
+      ffmpegRef.current = ffmpeg
       
+      // Use standard single-threaded version (more compatible)
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
+      await ffmpeg.load({
+        coreURL: `${baseURL}/ffmpeg-core.js`,
+        wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+      })
+      
+      setFfmpegLoaded(true)
+      console.log('FFmpeg loaded successfully')
+      return true
+    } catch (err) {
+      console.error('Failed to load FFmpeg:', err)
+      // Try with default configuration
       try {
         const ffmpeg = new FFmpeg()
         ffmpegRef.current = ffmpeg
-        
-        // Use standard single-threaded version (more compatible)
-        // Note: WebM/Opus files may not be supported in basic build
-        const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
-        await ffmpeg.load({
-          coreURL: `${baseURL}/ffmpeg-core.js`,
-          wasmURL: `${baseURL}/ffmpeg-core.wasm`,
-        })
-        
+        await ffmpeg.load()
         setFfmpegLoaded(true)
-        console.log('FFmpeg loaded successfully')
-      } catch (err) {
-        console.error('Failed to load FFmpeg:', err)
-        // Try with default configuration
-        try {
-          const ffmpeg = new FFmpeg()
-          ffmpegRef.current = ffmpeg
-          await ffmpeg.load()
-          setFfmpegLoaded(true)
-          console.log('FFmpeg loaded with default config')
-        } catch (err2) {
-          console.error('FFmpeg default load also failed:', err2)
-        }
+        console.log('FFmpeg loaded with default config')
+        return true
+      } catch (err2) {
+        console.error('FFmpeg default load also failed:', err2)
+        return false
       }
     }
-    
-    loadFFmpeg()
+  }, [ffmpegLoaded])
+
+  // Cleanup FFmpeg on unmount to free memory
+  useEffect(() => {
+    return () => {
+      if (ffmpegRef.current) {
+        try {
+          ffmpegRef.current.terminate()
+          console.log('FFmpeg terminated and memory freed')
+        } catch (e) {
+          console.log('FFmpeg cleanup:', e)
+        }
+        ffmpegRef.current = null
+        setFfmpegLoaded(false)
+      }
+    }
   }, [])
 
   // Supported formats - only those that FFmpeg.wasm can reliably compress
@@ -225,8 +239,10 @@ export default function AudioUploader({
       }
     }
     
-    if (!ffmpegRef.current || !ffmpegLoaded) {
-      throw new Error('FFmpeg not loaded. Please refresh the page and try again.')
+    // Lazy load FFmpeg when needed
+    const ffmpegReady = await loadFFmpegIfNeeded()
+    if (!ffmpegReady || !ffmpegRef.current) {
+      throw new Error('Failed to load compression engine. Please refresh the page and try again.')
     }
     
     const ffmpeg = ffmpegRef.current
@@ -476,8 +492,10 @@ export default function AudioUploader({
 
   // Silent compression for AI analysis (no UI feedback)
   const compressForAnalysis = async (file: File): Promise<File | null> => {
-    if (!ffmpegRef.current || !ffmpegLoaded) {
-      console.log('FFmpeg not loaded, skipping compression')
+    // Lazy load FFmpeg when needed
+    const ffmpegReady = await loadFFmpegIfNeeded()
+    if (!ffmpegReady || !ffmpegRef.current) {
+      console.log('FFmpeg not available, skipping compression')
       return null
     }
 

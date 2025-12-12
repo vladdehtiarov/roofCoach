@@ -64,22 +64,38 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
     }
   }, [])
 
-  // Load FFmpeg for compression
+  // Load FFmpeg LAZILY - only when needed for compression
+  const loadFFmpegIfNeeded = useCallback(async () => {
+    if (ffmpegLoaded && ffmpegRef.current) return true
+    
+    try {
+      const ffmpeg = new FFmpeg()
+      await ffmpeg.load()
+      ffmpegRef.current = ffmpeg
+      setFfmpegLoaded(true)
+      console.log('FFmpeg loaded for recorder')
+      return true
+    } catch (err) {
+      console.error('Failed to load FFmpeg:', err)
+      return false
+    }
+  }, [ffmpegLoaded])
+
+  // Cleanup FFmpeg on unmount to free memory
   useEffect(() => {
-    const loadFFmpeg = async () => {
-      if (ffmpegLoaded || ffmpegRef.current) return
-      try {
-        const ffmpeg = new FFmpeg()
-        await ffmpeg.load()
-        ffmpegRef.current = ffmpeg
-        setFfmpegLoaded(true)
-        console.log('FFmpeg loaded for recorder')
-      } catch (err) {
-        console.error('Failed to load FFmpeg:', err)
+    return () => {
+      if (ffmpegRef.current) {
+        try {
+          ffmpegRef.current.terminate()
+          console.log('FFmpeg recorder terminated')
+        } catch (e) {
+          console.log('FFmpeg cleanup:', e)
+        }
+        ffmpegRef.current = null
+        setFfmpegLoaded(false)
       }
     }
-    loadFFmpeg()
-  }, [ffmpegLoaded])
+  }, [])
 
   // Audio level analysis functions
   const startAudioAnalysis = useCallback((stream: MediaStream) => {
@@ -303,8 +319,10 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
   // Compress audio for AI analysis - same settings as AudioUploader
   // Target: minimum size that AI can still transcribe (8kbps @ 8kHz)
   const compressForAnalysis = async (blob: Blob): Promise<Blob | null> => {
-    if (!ffmpegRef.current || !ffmpegLoaded) {
-      console.log('FFmpeg not loaded, skipping compression')
+    // Lazy load FFmpeg when needed
+    const ffmpegReady = await loadFFmpegIfNeeded()
+    if (!ffmpegReady || !ffmpegRef.current) {
+      console.log('FFmpeg not available, skipping compression')
       return null
     }
 

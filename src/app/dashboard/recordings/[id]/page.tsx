@@ -32,13 +32,6 @@ export default async function RecordingDetailPage({ params }: PageProps) {
     notFound()
   }
 
-  // Fetch transcript if exists
-  const { data: transcript } = await supabase
-    .from('transcripts')
-    .select('*')
-    .eq('recording_id', id)
-    .single()
-
   // Fetch analysis if exists
   const { data: analysis } = await supabase
     .from('audio_analyses')
@@ -49,7 +42,6 @@ export default async function RecordingDetailPage({ params }: PageProps) {
   return (
     <RecordingDetailClient 
       recording={recording} 
-      transcript={transcript}
       analysis={analysis}
       user={user}
     />

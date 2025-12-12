@@ -177,6 +177,58 @@ export default function DashboardClient({ user }: { user: User }) {
     return data.signedUrl
   }
 
+  // Lazy load audio URL when player is expanded
+  const loadAudioUrlForRecording = async (recordingId: string) => {
+    const recording = recordings.find(r => r.id === recordingId)
+    if (!recording || recording.audioUrl) return // Already loaded
+    
+    const audioUrl = await getSignedUrl(recording.file_path)
+    if (audioUrl) {
+      setRecordings(prev => prev.map(r => 
+        r.id === recordingId ? { ...r, audioUrl } : r
+      ))
+    }
+  }
+
+  // Handle player expansion with lazy URL loading
+  const handleExpandPlayer = async (recordingId: string) => {
+    const newExpandedId = expandedPlayer === recordingId ? null : recordingId
+    setExpandedPlayer(newExpandedId)
+    
+    if (newExpandedId) {
+      await loadAudioUrlForRecording(newExpandedId)
+    }
+  }
+
+  // Handle download with lazy URL loading
+  const handleDownload = async (e: React.MouseEvent, recording: RecordingWithUrl) => {
+    e.stopPropagation()
+    e.preventDefault()
+    
+    let url = recording.audioUrl
+    if (!url) {
+      url = await getSignedUrl(recording.file_path)
+      if (url) {
+        // Update state for future use
+        setRecordings(prev => prev.map(r => 
+          r.id === recording.id ? { ...r, audioUrl: url } : r
+        ))
+      }
+    }
+    
+    if (url) {
+      // Trigger download
+      const link = document.createElement('a')
+      link.href = url
+      link.download = recording.file_name
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } else {
+      toast.error('Failed to get download URL')
+    }
+  }
+
   const loadRecordings = async () => {
     if (!supabase) {
       setLoading(false)
@@ -201,28 +253,30 @@ export default function DashboardClient({ user }: { user: User }) {
       const { data, error } = await query
 
       if (error) throw error
-
-      // Fetch analysis statuses
-      const { data: analysesData } = await supabase
-        .from('audio_analyses')
-        .select('recording_id, processing_status')
-        .in('recording_id', (data || []).map(r => r.id))
+      
+      const recordingIds = (data || []).map(r => r.id)
+      
+      // OPTIMIZATION: Run both queries in parallel instead of sequentially
+      const [analysesResult, tagsResult] = await Promise.all([
+        supabase
+          .from('audio_analyses')
+          .select('recording_id, processing_status')
+          .in('recording_id', recordingIds),
+        supabase
+          .from('recording_tags')
+          .select('recording_id, tags(*)')
+          .in('recording_id', recordingIds)
+      ])
 
       const analysisMap = new Map(
-        (analysesData || []).map(a => [a.recording_id, a.processing_status])
+        (analysesResult.data || []).map(a => [a.recording_id, a.processing_status])
       )
-
-      // Fetch tags for all recordings
-      const { data: recordingTagsData } = await supabase
-        .from('recording_tags')
-        .select('recording_id, tags(*)')
-        .in('recording_id', (data || []).map(r => r.id))
 
       // Group tags by recording_id
       const tagsMap = new Map<string, Tag[]>()
-      if (recordingTagsData) {
+      if (tagsResult.data) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        recordingTagsData.forEach((rt: any) => {
+        tagsResult.data.forEach((rt: any) => {
           if (rt.tags) {
             const existing = tagsMap.get(rt.recording_id) || []
             existing.push(rt.tags as Tag)
@@ -231,16 +285,15 @@ export default function DashboardClient({ user }: { user: User }) {
         })
       }
 
-      const recordingsWithUrls = await Promise.all(
-        (data || []).map(async (recording) => {
-          const audioUrl = await getSignedUrl(recording.file_path)
-          const analysis_status = analysisMap.get(recording.id) as RecordingWithUrl['analysis_status'] || null
-          const tags = tagsMap.get(recording.id) || []
-          return { ...recording, audioUrl, analysis_status, tags }
-        })
-      )
+      // DON'T load signed URLs upfront - lazy load them when needed
+      // This reduces initial load from O(N) requests to O(1)
+      const recordingsWithData = (data || []).map((recording) => {
+        const analysis_status = analysisMap.get(recording.id) as RecordingWithUrl['analysis_status'] || null
+        const tags = tagsMap.get(recording.id) || []
+        return { ...recording, audioUrl: undefined, analysis_status, tags }
+      })
       
-      setRecordings(recordingsWithUrls)
+      setRecordings(recordingsWithData)
     } catch (err) {
       console.error('Error loading recordings:', err)
       toast.error('Failed to load recordings')
@@ -1203,7 +1256,7 @@ export default function DashboardClient({ user }: { user: User }) {
                         
                         <div 
                           className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 flex items-center justify-center cursor-pointer hover:from-amber-500/30 hover:to-orange-500/30 transition-colors"
-                          onClick={(e) => { e.stopPropagation(); setExpandedPlayer(expandedPlayer === recording.id ? null : recording.id); }}
+                          onClick={(e) => { e.stopPropagation(); handleExpandPlayer(recording.id); }}
                           title={expandedPlayer === recording.id ? 'Hide player' : 'Show player'}
                         >
                           {expandedPlayer === recording.id ? (
@@ -1284,19 +1337,15 @@ export default function DashboardClient({ user }: { user: User }) {
                           </p>
                         </div>
                         <div className="flex items-center gap-1">
-                          {recording.audioUrl && (
-                            <a
-                              href={recording.audioUrl}
-                              download={recording.file_name}
-                              onClick={(e) => e.stopPropagation()}
-                              className="p-2 text-slate-400 hover:text-white transition-colors"
-                              title="Download"
-                            >
-                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                              </svg>
-                            </a>
-                          )}
+                          <button
+                            onClick={(e) => handleDownload(e, recording)}
+                            className="p-2 text-slate-400 hover:text-white transition-colors"
+                            title="Download"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                          </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleArchiveRecording(recording, !recording.is_archived); }}
                             className={`p-2 transition-colors ${
@@ -1332,16 +1381,26 @@ export default function DashboardClient({ user }: { user: User }) {
                     </div>
                     
                     {/* Expandable Audio Player */}
-                    {expandedPlayer === recording.id && recording.audioUrl && recording.status === 'done' && !recording.is_archived && (
+                    {expandedPlayer === recording.id && recording.status === 'done' && !recording.is_archived && (
                       <div className="px-4 pb-4 animate-fade-in" onClick={(e) => e.stopPropagation()}>
-                        <audio
-                          controls
-                          className="w-full h-12 rounded-lg"
-                          preload="metadata"
-                          src={recording.audioUrl}
-                        >
-                          Your browser does not support the audio element.
-                        </audio>
+                        {recording.audioUrl ? (
+                          <audio
+                            controls
+                            className="w-full h-12 rounded-lg"
+                            preload="metadata"
+                            src={recording.audioUrl}
+                          >
+                            Your browser does not support the audio element.
+                          </audio>
+                        ) : (
+                          <div className="h-12 flex items-center justify-center text-slate-500 text-sm">
+                            <svg className="animate-spin w-4 h-4 mr-2" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            Loading audio...
+                          </div>
+                        )}
                       </div>
                     )}
 
