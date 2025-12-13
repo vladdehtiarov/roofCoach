@@ -37,6 +37,17 @@ export default function SpeakerAnalytics({ analytics }: Props) {
     )
   }
 
+  // Handle both old and new field names
+  const repTalkPercent = analytics.speaker_share_rep ?? analytics.rep_talk_percent ?? 50
+  const customerTalkPercent = analytics.customer_talk_percent ?? (100 - repTalkPercent)
+  const questionsAsked = analytics.questions_asked ?? analytics.questions_by_rep ?? 0
+  const questionsReceived = analytics.questions_received ?? 0
+  const pacing = analytics.pacing_wpm ?? 150
+  const conversationTime = analytics.conversation_time ?? 'N/A'
+  const repSpeakingTime = analytics.rep_speaking_time ?? 'N/A'
+  const customerSpeakingTime = analytics.customer_speaking_time ?? 'N/A'
+  const longestMonologue = analytics.longest_monologue ?? 'N/A'
+
   return (
     <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
       <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
@@ -44,26 +55,18 @@ export default function SpeakerAnalytics({ analytics }: Props) {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
         Speaker Analytics
-        <span className="ml-auto">
-          <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </span>
       </h3>
 
       <div className="space-y-1">
-        <MetricRow label="Conversation time" value={analytics.conversation_time} highlight />
-        <MetricRow label="Speaker share" value={`${analytics.speaker_share_rep}%`} />
-        <MetricRow label="Pacing" value={`${analytics.pacing_wpm} WPM`} />
-        <MetricRow label="Interactivity" value={`${(analytics.exchanges / (parseInt(analytics.conversation_time) || 60)).toFixed(1)} per min`} />
-        <MetricRow label="Exchanges" value={analytics.exchanges} />
-        <MetricRow label="Rep words spoken" value={Math.round(analytics.pacing_wpm * (parseInt(analytics.rep_speaking_time) || 0) / 60).toLocaleString()} />
-        <MetricRow label="Time speaking" value={analytics.rep_speaking_time} />
-        <MetricRow label="Time listening" value={analytics.customer_speaking_time} />
-        <MetricRow label="Questions asked" value={analytics.questions_asked} />
-        <MetricRow label="Questions received" value={analytics.questions_received} />
-        <MetricRow label="Longest monologue" value={analytics.longest_monologue} />
-        <MetricRow label="Control" value={`${Math.round(100 - analytics.speaker_share_rep)}%`} />
+        {conversationTime !== 'N/A' && <MetricRow label="Conversation time" value={conversationTime} highlight />}
+        <MetricRow label="Rep talk share" value={`${repTalkPercent}%`} />
+        <MetricRow label="Customer talk share" value={`${customerTalkPercent}%`} />
+        {pacing && <MetricRow label="Pacing" value={`${pacing} WPM`} />}
+        {repSpeakingTime !== 'N/A' && <MetricRow label="Time speaking" value={repSpeakingTime} />}
+        {customerSpeakingTime !== 'N/A' && <MetricRow label="Time listening" value={customerSpeakingTime} />}
+        <MetricRow label="Questions asked" value={questionsAsked} />
+        {questionsReceived > 0 && <MetricRow label="Questions received" value={questionsReceived} />}
+        {longestMonologue !== 'N/A' && <MetricRow label="Longest monologue" value={longestMonologue} />}
       </div>
     </div>
   )

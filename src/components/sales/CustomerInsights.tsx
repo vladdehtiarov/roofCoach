@@ -124,12 +124,18 @@ export default function CustomerInsights({ analysis, onTimestampClick, onStartAn
     )
   }
 
+  // Handle both old and new field names
+  const needs = analysis.needs_motivation || analysis.needs || []
+  const painPoints = analysis.pain_points || []
+  const objections = analysis.objections || []
+  const nextSteps = analysis.outcomes_next_steps || analysis.next_steps || []
+
   return (
     <div className="space-y-4">
       <InsightSection
         title="Customer Need & Motivation"
         icon="📋"
-        insights={analysis.needs_motivation}
+        insights={needs}
         onTimestampClick={onTimestampClick}
         accentColor="amber"
       />
@@ -137,7 +143,7 @@ export default function CustomerInsights({ analysis, onTimestampClick, onStartAn
       <InsightSection
         title="Customer Pain Points"
         icon="📋"
-        insights={analysis.pain_points}
+        insights={painPoints}
         onTimestampClick={onTimestampClick}
         accentColor="red"
       />
@@ -145,7 +151,7 @@ export default function CustomerInsights({ analysis, onTimestampClick, onStartAn
       <InsightSection
         title="Key Objections & Resistance"
         icon="📋"
-        insights={analysis.objections}
+        insights={objections}
         onTimestampClick={onTimestampClick}
         accentColor="blue"
       />
@@ -153,7 +159,7 @@ export default function CustomerInsights({ analysis, onTimestampClick, onStartAn
       <InsightSection
         title="Outcome & Next Steps"
         icon="📋"
-        insights={analysis.outcomes_next_steps}
+        insights={nextSteps}
         onTimestampClick={onTimestampClick}
         accentColor="emerald"
       />

@@ -37,8 +37,9 @@ export default function ReEngagePanel({ reEngage, customerName, repName }: Props
   }
 
   const handleCopy = async () => {
-    if (reEngage.suggested_message) {
-      await navigator.clipboard.writeText(reEngage.suggested_message)
+    const message = reEngage.suggested_message || reEngage.follow_up_message
+    if (message) {
+      await navigator.clipboard.writeText(message)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
@@ -68,12 +69,12 @@ export default function ReEngagePanel({ reEngage, customerName, repName }: Props
 
         {/* Details */}
         <div className="space-y-1">
-          <InfoRow label="First Price Quote" value={reEngage.first_price_quote} />
-          <InfoRow label="Final Price Quote" value={reEngage.final_price_quote} />
-          <InfoRow label="Financing" value={reEngage.financing} />
-          <InfoRow label="Commitment" value={reEngage.commitment} />
-          <InfoRow label="Main Objection" value={reEngage.main_objection} />
-          <InfoRow label="Emotional Tie" value={reEngage.emotional_tie} />
+          <InfoRow label="Price Quote" value={reEngage.first_price_quote || reEngage.price_quoted || 'Not mentioned'} />
+          <InfoRow label="Final Price Quote" value={reEngage.final_price_quote || 'N/A'} />
+          <InfoRow label="Financing" value={reEngage.financing || 'Not discussed'} />
+          <InfoRow label="Commitment" value={reEngage.commitment || 'N/A'} />
+          <InfoRow label="Main Objection" value={reEngage.main_objection || 'None identified'} />
+          <InfoRow label="Emotional Driver" value={reEngage.emotional_tie || reEngage.emotional_driver || 'Not identified'} />
         </div>
       </div>
 
@@ -113,7 +114,7 @@ export default function ReEngagePanel({ reEngage, customerName, repName }: Props
             </button>
           </div>
           <div className="text-slate-300 whitespace-pre-line text-sm leading-relaxed">
-            {reEngage.suggested_message}
+            {reEngage.suggested_message || reEngage.follow_up_message || 'No message suggested'}
           </div>
         </div>
       </div>

@@ -183,19 +183,21 @@ export default function SalesScorecard({ scorecard, onTimestampClick }: Props) {
           <div className="flex-1 space-y-4">
             <ProgressBar
               label="Process"
-              value={scorecard.process.score}
+              value={scorecard.process?.score || 0}
               color="#10B981"
             />
             <ProgressBar
               label="Skills"
-              value={scorecard.skills.score}
+              value={scorecard.skills?.score || 0}
               color="#3B82F6"
             />
-            <ProgressBar
-              label="Communication"
-              value={scorecard.communication.score}
-              color="#8B5CF6"
-            />
+            {scorecard.communication && (
+              <ProgressBar
+                label="Communication"
+                value={scorecard.communication.score}
+                color="#8B5CF6"
+              />
+            )}
           </div>
         </div>
       </div>
@@ -206,27 +208,33 @@ export default function SalesScorecard({ scorecard, onTimestampClick }: Props) {
           Performance Breakdown
         </h3>
 
-        <CategoryBreakdown
-          category={scorecard.process}
-          name="Process"
-          isExpanded={expandedCategory === 'process'}
-          onToggle={() => setExpandedCategory(expandedCategory === 'process' ? null : 'process')}
-          onTimestampClick={onTimestampClick}
-        />
-        <CategoryBreakdown
-          category={scorecard.skills}
-          name="Skills"
-          isExpanded={expandedCategory === 'skills'}
-          onToggle={() => setExpandedCategory(expandedCategory === 'skills' ? null : 'skills')}
-          onTimestampClick={onTimestampClick}
-        />
-        <CategoryBreakdown
-          category={scorecard.communication}
-          name="Communication"
-          isExpanded={expandedCategory === 'communication'}
-          onToggle={() => setExpandedCategory(expandedCategory === 'communication' ? null : 'communication')}
-          onTimestampClick={onTimestampClick}
-        />
+        {scorecard.process && (
+          <CategoryBreakdown
+            category={scorecard.process}
+            name="Process"
+            isExpanded={expandedCategory === 'process'}
+            onToggle={() => setExpandedCategory(expandedCategory === 'process' ? null : 'process')}
+            onTimestampClick={onTimestampClick}
+          />
+        )}
+        {scorecard.skills && (
+          <CategoryBreakdown
+            category={scorecard.skills}
+            name="Skills"
+            isExpanded={expandedCategory === 'skills'}
+            onToggle={() => setExpandedCategory(expandedCategory === 'skills' ? null : 'skills')}
+            onTimestampClick={onTimestampClick}
+          />
+        )}
+        {scorecard.communication && (
+          <CategoryBreakdown
+            category={scorecard.communication}
+            name="Communication"
+            isExpanded={expandedCategory === 'communication'}
+            onToggle={() => setExpandedCategory(expandedCategory === 'communication' ? null : 'communication')}
+            onTimestampClick={onTimestampClick}
+          />
+        )}
       </div>
     </div>
   )

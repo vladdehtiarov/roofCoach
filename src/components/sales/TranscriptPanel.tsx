@@ -22,16 +22,6 @@ function parseTimestamp(ts: string): number {
   return 0
 }
 
-function formatTimestamp(seconds: number): string {
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = Math.floor(seconds % 60)
-  if (h > 0) {
-    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-  }
-  return `${m}:${String(s).padStart(2, '0')}`
-}
-
 // Get initials from speaker name
 function getInitials(name: string): string {
   return name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase()
@@ -49,6 +39,8 @@ function getSpeakerStyles(speaker: string): { bg: string; text: string; avatar: 
   return { bg: 'bg-amber-500/10', text: 'text-amber-400', avatar: 'bg-amber-500' }
 }
 
+const ITEMS_PER_PAGE = 50 // Only render 50 items at a time
+
 export default function TranscriptPanel({ 
   transcript, 
   currentTime = 0, 
@@ -59,34 +51,70 @@ export default function TranscriptPanel({
   const [activeTab, setActiveTab] = useState<'transcript' | 'bookmarks'>('transcript')
   const [searchQuery, setSearchQuery] = useState('')
   const [commentText, setCommentText] = useState('')
+  const [displayCount, setDisplayCount] = useState(ITEMS_PER_PAGE)
   const activeEntryRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
-  // Parse transcript if it's a string
+  // Parse transcript - supports both plain text and JSON formats
   const entries: TranscriptEntry[] = useMemo(() => {
     if (!transcript) return []
     if (Array.isArray(transcript)) return transcript
+    
+    // Try JSON first (legacy format)
     try {
       const parsed = JSON.parse(transcript)
       if (Array.isArray(parsed)) return parsed
-      return []
     } catch {
-      // Fallback: parse markdown-style transcript
-      // Format: **Speaker:** Text
-      const lines = transcript.split(/\*\*([^*]+):\*\*/).filter(Boolean)
-      const result: TranscriptEntry[] = []
-      for (let i = 0; i < lines.length - 1; i += 2) {
-        const speaker = lines[i].trim()
-        const text = lines[i + 1]?.trim() || ''
-        if (speaker && text) {
-          result.push({ speaker, text, timestamp: '0:00' })
-        }
-      }
-      if (result.length === 0) {
-        return [{ speaker: 'Transcript', text: transcript, timestamp: '0:00' }]
-      }
-      return result
+      // Not JSON, continue to plain text parsing
     }
+    
+    // Parse plain text format:
+    // HH:MM:SS - Speaker Name
+    //       What they said...
+    const result: TranscriptEntry[] = []
+    const lines = transcript.split('\n')
+    let currentEntry: { speaker: string; timestamp: string; text: string[] } | null = null
+    
+    for (const line of lines) {
+      // Match timestamp line: "00:00:00 - Speaker Name" or "0:00 - Speaker"
+      const timestampMatch = line.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(.+)$/)
+      
+      if (timestampMatch) {
+        // Save previous entry
+        if (currentEntry) {
+          result.push({
+            speaker: currentEntry.speaker,
+            timestamp: currentEntry.timestamp,
+            text: currentEntry.text.join(' ').trim()
+          })
+        }
+        // Start new entry
+        currentEntry = {
+          timestamp: timestampMatch[1],
+          speaker: timestampMatch[2].trim(),
+          text: []
+        }
+      } else if (currentEntry && line.trim()) {
+        // Add text to current entry
+        currentEntry.text.push(line.trim())
+      }
+    }
+    
+    // Don't forget the last entry
+    if (currentEntry) {
+      result.push({
+        speaker: currentEntry.speaker,
+        timestamp: currentEntry.timestamp,
+        text: currentEntry.text.join(' ').trim()
+      })
+    }
+    
+    // If no entries parsed, show raw transcript
+    if (result.length === 0 && transcript.trim()) {
+      return [{ speaker: 'Transcript', text: transcript, timestamp: '0:00' }]
+    }
+    
+    return result
   }, [transcript])
 
   // Filter by search
@@ -98,6 +126,19 @@ export default function TranscriptPanel({
       e.speaker.toLowerCase().includes(query)
     )
   }, [entries, searchQuery])
+
+  // Paginated entries - only show first N items
+  const paginatedEntries = useMemo(() => {
+    return filteredEntries.slice(0, displayCount)
+  }, [filteredEntries, displayCount])
+
+  const hasMore = filteredEntries.length > displayCount
+  
+  // Handle search change with pagination reset
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value)
+    setDisplayCount(ITEMS_PER_PAGE) // Reset pagination when searching
+  }
 
   // Find current entry based on playback time
   const currentEntryIndex = useMemo(() => {
@@ -171,7 +212,7 @@ export default function TranscriptPanel({
                 type="text"
                 placeholder="Search transcript..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
               />
             </div>
@@ -188,7 +229,12 @@ export default function TranscriptPanel({
                 {searchQuery ? 'No matches found' : 'No transcript available'}
               </div>
             ) : (
-              filteredEntries.map((entry, idx) => {
+              <>
+              {/* Show item count */}
+              <div className="px-4 py-2 text-xs text-slate-500 bg-slate-800/30">
+                Showing {paginatedEntries.length} of {filteredEntries.length} entries
+              </div>
+              {paginatedEntries.map((entry, idx) => {
                 const isActive = idx === currentEntryIndex && !searchQuery
                 // Determine which field is name vs text
                 // Name is usually shorter and contains only letters/spaces
@@ -225,7 +271,19 @@ export default function TranscriptPanel({
                     </p>
                   </div>
                 )
-              })
+              })}
+              {/* Load More button */}
+              {hasMore && (
+                <div className="p-4">
+                  <button
+                    onClick={() => setDisplayCount(prev => prev + ITEMS_PER_PAGE)}
+                    className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Load More ({filteredEntries.length - displayCount} remaining)
+                  </button>
+                </div>
+              )}
+              </>
             )}
           </div>
         ) : (

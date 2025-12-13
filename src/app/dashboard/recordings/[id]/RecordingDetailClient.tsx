@@ -16,19 +16,22 @@ const CustomerInsights = dynamic(() => import('@/components/sales/CustomerInsigh
 const SpeakerAnalytics = dynamic(() => import('@/components/sales/SpeakerAnalytics'))
 const ReEngagePanel = dynamic(() => import('@/components/sales/ReEngagePanel'))
 const TranscriptPanel = dynamic(() => import('@/components/sales/TranscriptPanel'))
-const CustomAudioPlayer = dynamic(() => import('@/components/CustomAudioPlayer'))
+const SimpleAudioPlayer = dynamic(() => import('@/components/SimpleAudioPlayer'))
 const ExportReportButton = dynamic(() => import('@/components/ExportReportButton'))
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PartialAnalysis = any // Analysis without heavy transcript field (loaded lazily)
 
 interface Props {
   recording: Recording
-  analysis: AudioAnalysis | null
+  analysis: PartialAnalysis | null
   user: User
 }
 
 type TabType = 'overview' | 'metrics' | 're-engage' | 'comments'
 
 export default function RecordingDetailClient({ recording, analysis: initialAnalysis, user: _user }: Props) {
-  const [analysis, setAnalysis] = useState<AudioAnalysis | null>(initialAnalysis)
+  const [analysis, setAnalysis] = useState<PartialAnalysis | null>(initialAnalysis)
   const [audioUrl, setAudioUrl] = useState<string>('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -36,6 +39,10 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
   const [activeTab, setActiveTab] = useState<TabType>('overview')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  
+  // Lazy-loaded transcript (loaded separately to avoid memory issues)
+  const [transcript, setTranscript] = useState<string | null>(null)
+  const [transcriptLoading, setTranscriptLoading] = useState(false)
   
   // Delete modal
   const [deleteModal, setDeleteModal] = useState(false)
@@ -79,13 +86,32 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
           schema: 'public',
           table: 'audio_analyses',
           filter: `recording_id=eq.${recording.id}`,
-        }, (payload) => {
-          const updated = payload.new as AudioAnalysis
-          setAnalysis(updated)
-          if (updated.processing_status === 'done') {
+        }, async (payload) => {
+          const updated = payload.new as PartialAnalysis
+          
+          // When analysis completes, re-fetch (without heavy transcript field)
+          if (updated.processing_status === 'done' || updated.processing_status === 'error') {
+            const { data: freshAnalysis } = await supabase
+              .from('audio_analyses')
+              .select(`
+                id, recording_id, processing_status, error_message, current_chunk_message,
+                title, summary, scorecard, customer_analysis, speaker_analytics, re_engage,
+                timeline, main_topics, duration_analyzed, language, confidence_score,
+                input_tokens, output_tokens, total_tokens, model_used, estimated_cost_usd,
+                created_at, updated_at
+              `)
+              .eq('recording_id', recording.id)
+              .single()
+            
+            if (freshAnalysis) {
+              setAnalysis(freshAnalysis)
+              // Reset transcript so it will be reloaded
+              setTranscript(null)
+            }
             setIsAnalyzing(false)
-          } else if (updated.processing_status === 'error') {
-            setIsAnalyzing(false)
+          } else {
+            // For progress updates, just use the payload
+            setAnalysis(updated)
           }
         })
         .subscribe()
@@ -95,6 +121,28 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
       }
     }
   }, [recording.id, recording.file_path, supabase])
+
+  // Load transcript on demand (it's heavy, so we load it separately)
+  const loadTranscript = async () => {
+    if (transcript || transcriptLoading || !supabase || !analysis?.id) return
+    
+    setTranscriptLoading(true)
+    try {
+      const { data } = await supabase
+        .from('audio_analyses')
+        .select('transcript')
+        .eq('id', analysis.id)
+        .single()
+      
+      if (data?.transcript) {
+        setTranscript(data.transcript)
+      }
+    } catch (err) {
+      console.error('Failed to load transcript:', err)
+    } finally {
+      setTranscriptLoading(false)
+    }
+  }
 
   const handleStartAnalysis = async () => {
     if (!supabase) return
@@ -342,24 +390,25 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
                 <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-4">
                   <div className="flex items-center gap-4">
                     <div className="text-center">
-                      <div className="text-4xl font-bold text-amber-400">{analysis.scorecard.total}</div>
+                      <div className="text-4xl font-bold text-amber-400">{analysis.scorecard.total || 0}</div>
                       <div className="text-xs text-slate-500">of 100</div>
                     </div>
                     <div className="flex-1 grid grid-cols-3 gap-4">
                       <div>
                         <div className="text-xs text-slate-500 mb-1">Process</div>
                         <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-500" style={{ width: `${analysis.scorecard.process.score}%` }} />
+                          <div className="h-full bg-emerald-500" style={{ width: `${analysis.scorecard.process?.score || 0}%` }} />
                         </div>
-                        <div className="text-xs text-slate-400 mt-1">{analysis.scorecard.process.score}</div>
+                        <div className="text-xs text-slate-400 mt-1">{analysis.scorecard.process?.score || 0}</div>
                       </div>
                       <div>
                         <div className="text-xs text-slate-500 mb-1">Skills</div>
                         <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                          <div className="h-full bg-blue-500" style={{ width: `${analysis.scorecard.skills.score}%` }} />
+                          <div className="h-full bg-blue-500" style={{ width: `${analysis.scorecard.skills?.score || 0}%` }} />
                         </div>
-                        <div className="text-xs text-slate-400 mt-1">{analysis.scorecard.skills.score}</div>
+                        <div className="text-xs text-slate-400 mt-1">{analysis.scorecard.skills?.score || 0}</div>
                       </div>
+                      {analysis.scorecard.communication && (
                       <div>
                         <div className="text-xs text-slate-500 mb-1">Communication</div>
                         <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
@@ -367,6 +416,7 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
                         </div>
                         <div className="text-xs text-slate-400 mt-1">{analysis.scorecard.communication.score}</div>
                       </div>
+                      )}
                     </div>
                     <Link
                       href="#"
@@ -420,10 +470,9 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
         {/* Audio Player - Fixed at bottom */}
         <div className="flex-shrink-0 border-t border-slate-800 bg-slate-950 p-4">
           {audioUrl && recording.duration ? (
-            <CustomAudioPlayer
+            <SimpleAudioPlayer
               src={audioUrl}
               duration={recording.duration}
-              timeline={analysis?.timeline}
               onTimeUpdate={setCurrentTime}
               playbackSpeed={playbackSpeed}
               onPlaybackSpeedChange={setPlaybackSpeed}
@@ -437,12 +486,24 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
       </div>
 
       {/* Right Sidebar - Transcript - Full height like left sidebar */}
-      <aside className="w-96 flex-shrink-0 bg-slate-900 border-l border-slate-800 flex flex-col h-full">
-        <TranscriptPanel
-          transcript={analysis?.transcript || null}
-          currentTime={currentTime}
-          onTimestampClick={seekToTimestamp}
-        />
+      <aside 
+        className="w-96 flex-shrink-0 bg-slate-900 border-l border-slate-800 flex flex-col h-full"
+        onMouseEnter={loadTranscript}
+      >
+        {transcriptLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500 mx-auto mb-3"></div>
+              <p className="text-slate-400 text-sm">Loading transcript...</p>
+            </div>
+          </div>
+        ) : (
+          <TranscriptPanel
+            transcript={transcript}
+            currentTime={currentTime}
+            onTimestampClick={seekToTimestamp}
+          />
+        )}
       </aside>
 
       {/* Delete Modal */}

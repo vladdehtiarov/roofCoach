@@ -32,17 +32,43 @@ export default async function RecordingDetailPage({ params }: PageProps) {
     notFound()
   }
 
-  // Fetch analysis if exists
+  // Fetch analysis if exists - but NOT the heavy transcript field
+  // Transcript will be loaded lazily on the client
   const { data: analysis } = await supabase
     .from('audio_analyses')
-    .select('*')
+    .select(`
+      id,
+      recording_id,
+      processing_status,
+      error_message,
+      current_chunk_message,
+      title,
+      summary,
+      scorecard,
+      customer_analysis,
+      speaker_analytics,
+      re_engage,
+      timeline,
+      main_topics,
+      duration_analyzed,
+      language,
+      confidence_score,
+      input_tokens,
+      output_tokens,
+      total_tokens,
+      model_used,
+      estimated_cost_usd,
+      created_at,
+      updated_at
+    `)
     .eq('recording_id', id)
     .single()
 
   return (
     <RecordingDetailClient 
       recording={recording} 
-      analysis={analysis}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      analysis={analysis as any}
       user={user}
     />
   )

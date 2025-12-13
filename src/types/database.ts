@@ -167,34 +167,51 @@ export interface InsightWithTimestamps {
 }
 
 export interface CustomerAnalysis {
-  needs_motivation: InsightWithTimestamps[]
+  // Flexible field names (old and new prompt formats)
+  needs_motivation?: InsightWithTimestamps[]
+  needs?: InsightWithTimestamps[]
   pain_points: InsightWithTimestamps[]
   objections: InsightWithTimestamps[]
-  outcomes_next_steps: InsightWithTimestamps[]
+  outcomes_next_steps?: InsightWithTimestamps[]
+  next_steps?: InsightWithTimestamps[]
 }
 
 export interface SpeakerAnalytics {
-  conversation_time: string
-  rep_speaking_time: string
-  customer_speaking_time: string
-  speaker_share_rep: number
-  pacing_wpm: number
-  questions_asked: number
-  questions_received: number
+  // Flexible field names
+  conversation_time?: string
+  rep_speaking_time?: string
+  customer_speaking_time?: string
+  speaker_share_rep?: number
+  rep_talk_percent?: number
+  customer_talk_percent?: number
+  pacing_wpm?: number
+  questions_asked?: number
+  questions_by_rep?: number
+  questions_received?: number
   longest_monologue: string
   exchanges: number
 }
 
 export interface ReEngage {
   recap: string
-  first_price_quote: string
-  final_price_quote: string
-  financing: string
-  commitment: string
+  first_price_quote?: string
+  final_price_quote?: string
+  price_quoted?: string  // Alternative field name
+  financing?: string
+  commitment?: string
   main_objection: string
-  emotional_tie: string
+  emotional_tie?: string
+  emotional_driver?: string  // Alternative field name
   recommended_action: string
-  suggested_message: string
+  suggested_message?: string
+  follow_up_message?: string  // Alternative field name
+}
+
+// Coaching insights
+export interface Coaching {
+  strengths: string[]
+  improvements: string[]
+  quick_wins: string[]
 }
 
 // Comprehensive Report (WHY/WHAT/WHO/WHEN phases)
@@ -296,6 +313,7 @@ export interface AudioAnalysis {
   customer_analysis: CustomerAnalysis | null
   speaker_analytics: SpeakerAnalytics | null
   re_engage: ReEngage | null
+  coaching: Coaching | null
   comprehensive_report: ComprehensiveReport | null
   
   // Metadata
