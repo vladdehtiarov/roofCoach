@@ -84,9 +84,9 @@ export function W4ExportButton({ report, fileName = 'w4-report' }: Props) {
     if (areas_for_improvement?.length > 0) {
       md += `## AREAS FOR IMPROVEMENT\n\n`
       for (const item of areas_for_improvement) {
-        md += `- ${item}\n`
+        md += `### ${item.area}\n${item.recommendation}\n\n`
       }
-      md += `\n---\n\n`
+      md += `---\n\n`
     }
 
     if (weakest_elements?.length > 0) {
@@ -229,7 +229,9 @@ export function W4ExportButton({ report, fileName = 'w4-report' }: Props) {
       if (areas_for_improvement?.length > 0) {
         addSection('AREAS FOR IMPROVEMENT')
         for (const item of areas_for_improvement) {
-          addText(`• ${item}`)
+          addText(`• ${item.area}`, 10, true)
+          addText(`  ${item.recommendation}`, 9)
+          y += 2
         }
       }
       
@@ -391,7 +393,8 @@ export function W4ExportButton({ report, fileName = 'w4-report' }: Props) {
       if (areas_for_improvement?.length > 0) {
         addHeading('AREAS FOR IMPROVEMENT', HeadingLevel.HEADING_1)
         for (const item of areas_for_improvement) {
-          addBullet(item)
+          addParagraph(item.area, true)
+          addParagraph(item.recommendation)
         }
       }
       

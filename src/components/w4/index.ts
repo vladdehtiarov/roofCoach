@@ -5,4 +5,5 @@ export { W4Insights } from './W4Insights'
 export { W4Coaching } from './W4Coaching'
 export { W4QuickWins } from './W4QuickWins'
 export { W4ExportButton } from './W4ExportButton'
+export { ProcessingStages } from './ProcessingStages'
 

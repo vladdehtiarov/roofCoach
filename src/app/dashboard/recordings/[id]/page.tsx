@@ -40,6 +40,7 @@ export default async function RecordingDetailPage({ params }: PageProps) {
       id,
       recording_id,
       processing_status,
+      processing_stage,
       error_message,
       current_chunk_message,
       title,

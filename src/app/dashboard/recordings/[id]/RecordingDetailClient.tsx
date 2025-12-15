@@ -18,6 +18,7 @@ const W4Insights = dynamic(() => import('@/components/w4/W4Insights').then(m => 
 const W4Coaching = dynamic(() => import('@/components/w4/W4Coaching').then(m => ({ default: m.W4Coaching })))
 const W4QuickWins = dynamic(() => import('@/components/w4/W4QuickWins').then(m => ({ default: m.W4QuickWins })))
 const W4ExportButton = dynamic(() => import('@/components/w4/W4ExportButton').then(m => ({ default: m.W4ExportButton })))
+const ProcessingStages = dynamic(() => import('@/components/w4/ProcessingStages').then(m => ({ default: m.ProcessingStages })))
 const TranscriptPanel = dynamic(() => import('@/components/sales/TranscriptPanel'))
 const SimpleAudioPlayer = dynamic(() => import('@/components/SimpleAudioPlayer'))
 
@@ -38,12 +39,41 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   
-  // isAnalyzing is derived from processing_status
-  const isAnalyzing = analysis?.processing_status === 'processing'
+  // isAnalyzing is ONLY true when W4 analysis is actively running
+  // Transcript generation is separate and shown on the right panel
+  const processingStage = analysis?.processing_stage as 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error' | undefined
+  const w4Report: W4Report | null = analysis?.w4_report || null
+  const isAnalyzing = processingStage === 'analyzing' && !w4Report // ONLY W4 analysis, not transcript
   
   // Lazy-loaded transcript (loaded separately to avoid memory issues)
   const [transcript, setTranscript] = useState<string | null>(null)
   const [transcriptLoading, setTranscriptLoading] = useState(false)
+  // Initialize transcriptGenerating based on processing_stage (persists across navigation)
+  const [transcriptGenerating, setTranscriptGenerating] = useState(processingStage === 'transcribing')
+  const [transcriptProgress, setTranscriptProgress] = useState<string | null>(
+    processingStage === 'transcribing' ? analysis?.current_chunk_message || 'Transcribing...' : null
+  )
+  const transcriptGeneratingRef = useRef(processingStage === 'transcribing')
+  
+  // Keep ref and state in sync with processing_stage changes
+  useEffect(() => {
+    transcriptGeneratingRef.current = transcriptGenerating
+  }, [transcriptGenerating])
+  
+  // Sync transcriptGenerating with processingStage from DB
+  useEffect(() => {
+    const isTranscribing = processingStage === 'transcribing'
+    if (isTranscribing) {
+      setTranscriptGenerating(true)
+      setTranscriptProgress(analysis?.current_chunk_message || 'Transcribing...')
+      transcriptGeneratingRef.current = true
+    } else if (transcriptGeneratingRef.current) {
+      // Transcription finished
+      setTranscriptGenerating(false)
+      setTranscriptProgress(null)
+      transcriptGeneratingRef.current = false
+    }
+  }, [processingStage, analysis?.current_chunk_message])
   
   // Delete modal
   const [deleteModal, setDeleteModal] = useState(false)
@@ -60,9 +90,6 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
       return null
     }
   }, [])
-
-  // Get W4 report from analysis
-  const w4Report: W4Report | null = analysis?.w4_report || null
 
   useEffect(() => {
     // Load audio URL
@@ -86,12 +113,18 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
       const handleAnalysisChange = async (payload: { new: PartialAnalysis }) => {
         const updated = payload.new as PartialAnalysis
         
+        // Update transcript progress if we're generating transcript (use ref to avoid stale closure)
+        if (updated.current_chunk_message && transcriptGeneratingRef.current) {
+          setTranscriptProgress(updated.current_chunk_message)
+        }
+        
         // When analysis completes or errors, re-fetch full data
-        if (updated.processing_status === 'done' || updated.processing_status === 'error') {
+        if (updated.processing_status === 'done' || updated.processing_status === 'error' || 
+            updated.processing_stage === 'done' || updated.processing_stage === 'error') {
           const { data: freshAnalysis } = await supabase
             .from('audio_analyses')
             .select(`
-              id, recording_id, processing_status, error_message, current_chunk_message,
+              id, recording_id, processing_status, processing_stage, error_message, current_chunk_message,
               title, summary, w4_report,
               duration_analyzed, language, confidence_score,
               input_tokens, output_tokens, total_tokens, model_used, estimated_cost_usd,
@@ -102,12 +135,26 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
           
           if (freshAnalysis) {
             setAnalysis(freshAnalysis)
-            // Reset transcript so it will be reloaded
-            setTranscript(null)
+            // Transcript done - stop generating and load it (use ref)
+            if (transcriptGeneratingRef.current) {
+              setTranscriptGenerating(false)
+              setTranscriptProgress(null)
+              // Load the transcript
+              const { data: transcriptData } = await supabase
+                .from('audio_analyses')
+                .select('transcript')
+                .eq('id', freshAnalysis.id)
+                .single()
+              if (transcriptData?.transcript) {
+                setTranscript(transcriptData.transcript)
+              }
+            } else {
+              setTranscript(null)
+            }
           }
         } else {
-          // For progress updates, just use the payload
-          setAnalysis(updated)
+          // For progress updates, MERGE with existing analysis (keep w4_report etc.)
+          setAnalysis((prev: PartialAnalysis | null) => prev ? { ...prev, ...updated } : updated)
         }
       }
 
@@ -158,16 +205,26 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
   const handleStartAnalysis = async () => {
     if (!supabase) return
     
-    // Optimistically update UI
-    setAnalysis((prev: PartialAnalysis | null) => prev ? { ...prev, processing_status: 'processing', current_chunk_message: 'Starting...' } : { processing_status: 'processing', current_chunk_message: 'Starting...' })
+    // Optimistically update UI - start with analyzing stage (no transcription step)
+    setAnalysis((prev: PartialAnalysis | null) => prev ? { 
+      ...prev, 
+      processing_status: 'processing', 
+      processing_stage: 'analyzing',
+      current_chunk_message: 'Starting W4 analysis...' 
+    } : { 
+      processing_status: 'processing', 
+      processing_stage: 'analyzing',
+      current_chunk_message: 'Starting W4 analysis...' 
+    })
     
     try {
+      // Call analyze endpoint directly (W4 analysis only, no transcript)
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           recordingId: recording.id,
-          filePath: recording.file_path,
+          filePath: recording.analysis_file_path || recording.file_path,
         }),
       })
 
@@ -176,10 +233,10 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
         throw new Error(result.message || 'Failed to start analysis')
       }
       
-      toast.info('W4 Analysis started!')
+      toast.info('🤖 W4 Analysis started! This will take 2-5 minutes.')
     } catch (err) {
       // Reset on error
-      setAnalysis((prev: PartialAnalysis | null) => prev ? { ...prev, processing_status: 'error' } : null)
+      setAnalysis((prev: PartialAnalysis | null) => prev ? { ...prev, processing_status: 'error', processing_stage: 'error' } : null)
       toast.error(err instanceof Error ? err.message : 'Failed to start analysis')
     }
   }
@@ -197,6 +254,40 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
       toast.error('Failed to delete recording')
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  // Generate transcript on-demand (streaming)
+  const handleGenerateTranscript = async () => {
+    if (!supabase || transcriptGenerating) return
+    
+    setTranscriptGenerating(true)
+    setTranscriptProgress('Starting transcript generation...')
+    
+    try {
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordingId: recording.id,
+          filePath: recording.analysis_file_path || recording.file_path,
+          transcriptOnly: true, // Flag to skip W4 analysis
+        }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to generate transcript')
+      }
+      
+      toast.info('🎙️ Transcript generation started! This may take a few minutes.')
+      
+      // Poll for transcript updates (streaming progress shown via realtime)
+      // The transcript will be loaded automatically when done via realtime subscription
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to generate transcript')
+      setTranscriptGenerating(false)
+      setTranscriptProgress(null)
     }
   }
 
@@ -320,35 +411,38 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
             <div className="flex items-center gap-4">
               {/* Status Badge */}
               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                analysis?.processing_status === 'done' 
+                w4Report
                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                  : analysis?.processing_status === 'processing'
+                  : processingStage === 'transcribing'
+                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                  : processingStage === 'analyzing'
                   ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                  : analysis?.processing_status === 'error'
+                  : processingStage === 'error' || analysis?.processing_status === 'error'
                   ? 'bg-red-500/20 text-red-400 border border-red-500/30'
                   : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
               }`}>
-                {analysis?.processing_status === 'done' ? '✓ Analyzed' : 
-                 analysis?.processing_status === 'processing' ? '⏳ Processing...' : 
-                 analysis?.processing_status === 'error' ? '✗ Error' :
-                 'Pending'}
+                {w4Report ? '✓ Analyzed' : 
+                 processingStage === 'transcribing' ? '🎙️ Transcribing...' :
+                 processingStage === 'analyzing' ? '🤖 Analyzing...' : 
+                 processingStage === 'error' || analysis?.processing_status === 'error' ? '✗ Error' :
+                 'Ready'}
               </span>
               
               {/* Processing message */}
-              {analysis?.processing_status === 'processing' && analysis?.current_chunk_message && (
+              {isAnalyzing && analysis?.current_chunk_message && (
                 <span className="text-sm text-gray-400">{analysis.current_chunk_message}</span>
               )}
             </div>
 
             <div className="flex items-center gap-2">
-              {/* Start Analysis button */}
-              {(!analysis || analysis.processing_status === 'error' || (analysis.processing_status === 'done' && !w4Report)) && !isAnalyzing && (
+              {/* Start Analysis button - show when no W4 report and not analyzing */}
+              {!w4Report && !isAnalyzing && (
                 <button
                   onClick={handleStartAnalysis}
                   className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2"
                 >
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                  <span>{analysis?.processing_status === 'done' ? 'Re-Analyze' : 'Start W4 Analysis'}</span>
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                  <span>Start W4 Analysis</span>
                 </button>
               )}
               
@@ -393,7 +487,7 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
         </header>
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-6 relative">
           {w4Report ? (
             <div className="space-y-6 max-w-5xl mx-auto">
               {/* Overall Performance */}
@@ -462,6 +556,15 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
                 rankAssessment={w4Report.rank_assessment}
               />
             </div>
+          ) : isAnalyzing ? (
+            /* Processing State - Centered */
+            <div className="flex items-center justify-center h-full">
+              <ProcessingStages
+                currentStage={processingStage || 'pending'}
+                message={analysis?.current_chunk_message}
+                errorMessage={analysis?.error_message}
+              />
+            </div>
           ) : (
             /* No Analysis State */
             <div className="flex flex-col items-center justify-center h-full text-center">
@@ -474,20 +577,18 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
               <p className="text-gray-400 mb-6 max-w-md">
                 Run the W4 Sales System analysis to get detailed coaching insights, checkpoint scores, and actionable recommendations.
               </p>
-              {!isAnalyzing ? (
-                <button
-                  onClick={handleStartAnalysis}
-                  className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                  Start W4 Analysis
-                </button>
-              ) : (
-                <div className="flex flex-col items-center gap-3">
-                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-amber-500"></div>
-                  <p className="text-amber-400">{analysis?.current_chunk_message || 'Starting analysis...'}</p>
+              {analysis?.processing_status === 'error' && analysis?.error_message && (
+                <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg max-w-md">
+                  <p className="text-sm text-red-400">{analysis.error_message}</p>
                 </div>
               )}
+              <button
+                onClick={handleStartAnalysis}
+                className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium rounded-lg hover:from-amber-600 hover:to-orange-600 transition-all flex items-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                {analysis?.processing_status === 'error' ? 'Retry Analysis' : 'Start W4 Analysis'}
+              </button>
             </div>
           )}
         </main>
@@ -515,20 +616,16 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
         className="w-96 flex-shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col h-full"
         onMouseEnter={loadTranscript}
       >
-        {transcriptLoading ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500 mx-auto mb-3"></div>
-              <p className="text-gray-400 text-sm">Loading transcript...</p>
-            </div>
-          </div>
-        ) : (
-          <TranscriptPanel
-            transcript={transcript}
-            currentTime={currentTime}
-            onTimestampClick={seekToTimestamp}
-          />
-        )}
+        <TranscriptPanel
+          transcript={transcript}
+          w4Report={w4Report}
+          currentTime={currentTime}
+          onTimestampClick={seekToTimestamp}
+          onGenerateTranscript={handleGenerateTranscript}
+          isGenerating={transcriptGenerating}
+          generatingProgress={transcriptProgress}
+          isLoading={transcriptLoading}
+        />
       </aside>
 
       {/* Delete Modal */}

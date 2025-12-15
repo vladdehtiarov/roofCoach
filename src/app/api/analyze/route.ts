@@ -337,6 +337,7 @@ export async function POST(request: Request) {
       }
       const { error: updateError } = await supabase.from('audio_analyses').update({
         processing_status: 'processing',
+        processing_stage: 'analyzing', // Direct to W4 analysis (no transcription step)
         current_chunk_message: 'Starting W4 analysis...',
         error_message: null,
       }).eq('id', existingAnalysis.id)
@@ -355,8 +356,9 @@ export async function POST(request: Request) {
         .insert({
           recording_id: recordingId,
           processing_status: 'processing',
+          processing_stage: 'analyzing', // Direct to W4 analysis (no transcription step)
           current_chunk_message: 'Starting W4 analysis...',
-          transcript: '',
+          transcript: '', // Will be generated on-demand if user requests
           title: 'Analyzing...',
           summary: '',
           language: 'en',
@@ -593,17 +595,18 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
     // Generate title from report
     const title = `${w4Report.rep_name} - ${w4Report.client_name} (${w4Report.overall_performance.rating}: ${w4Report.overall_performance.total_score}/100)`
 
-    await supabase.from('audio_analyses').update({
+    const { error: updateAnalysisError } = await supabase.from('audio_analyses').update({
       // Main data
       title: title,
       summary: w4Report.overall_performance.summary || '',
-      transcript: analysisResult.transcript || '',
+      // transcript: NOT set here - generated on-demand via /api/transcribe
       
       // W4 Report (new structure)
       w4_report: w4Report,
       
       // Metadata
       processing_status: 'done',
+      processing_stage: 'done',
       current_chunk_message: 'W4 Analysis complete!',
       confidence_score: 0.9,
       duration_analyzed: durationSeconds,
@@ -614,7 +617,15 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
       estimated_cost_usd: estimatedCost,
     }).eq('id', analysisId)
 
-    await supabase.from('recordings').update({ status: 'done' }).eq('id', recordingId)
+    if (updateAnalysisError) {
+      console.error('❌ Failed to save analysis result:', updateAnalysisError)
+      throw new Error(`Failed to save analysis: ${updateAnalysisError.message}`)
+    }
+
+    const { error: updateRecordingError } = await supabase.from('recordings').update({ status: 'done' }).eq('id', recordingId)
+    if (updateRecordingError) {
+      console.error('⚠️ Failed to update recording status:', updateRecordingError)
+    }
 
     // Step 6: Cleanup - delete file from Gemini (optional, auto-deletes after 48h)
     try {
@@ -633,6 +644,7 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
 
     await supabase.from('audio_analyses').update({
       processing_status: 'error',
+      processing_stage: 'error',
       error_message: errMsg.substring(0, 500),
       current_chunk_message: 'Error occurred',
     }).eq('id', analysisId)

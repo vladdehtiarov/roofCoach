@@ -1,12 +1,17 @@
 'use client'
 
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { TranscriptEntry } from '@/types/database'
+import { TranscriptEntry, W4Report, W4Phase } from '@/types/database'
 
 interface Props {
   transcript: string | TranscriptEntry[] | null
+  w4Report?: W4Report | null
   currentTime?: number
   onTimestampClick?: (timestamp: string) => void
+  onGenerateTranscript?: () => void
+  isGenerating?: boolean
+  generatingProgress?: string | null
+  isLoading?: boolean
 }
 
 function parseTimestamp(ts: string): number {
@@ -37,17 +42,63 @@ function getSpeakerStyles(speaker: string): { bg: string; text: string; avatar: 
   return { bg: 'bg-amber-500/10', text: 'text-amber-400', avatar: 'bg-amber-500' }
 }
 
-const ITEMS_PER_PAGE = 50 // Only render 50 items at a time
+const ITEMS_PER_PAGE = 50
+
+// Extract key insights from W4 checkpoints (best performing ones)
+function extractKeyInsights(w4Report: W4Report | null | undefined): Array<{phase: string, checkpoint: string, score: number, maxScore: number, insight: string}> {
+  if (!w4Report?.phases) return []
+  
+  const insights: Array<{phase: string, checkpoint: string, score: number, maxScore: number, insight: string}> = []
+  const phaseNames: Record<string, string> = {
+    why: 'WHY',
+    what: 'WHAT', 
+    who: 'WHO',
+    when: 'WHEN'
+  }
+  
+  for (const [phaseKey, phase] of Object.entries(w4Report.phases)) {
+    const phaseData = phase as W4Phase
+    if (phaseData?.checkpoints) {
+      for (const checkpoint of phaseData.checkpoints) {
+        if (checkpoint.justification && checkpoint.score > 0) {
+          insights.push({
+            phase: phaseNames[phaseKey] || phaseKey,
+            checkpoint: checkpoint.name,
+            score: checkpoint.score,
+            maxScore: checkpoint.max_score,
+            insight: checkpoint.justification.length > 200 
+              ? checkpoint.justification.substring(0, 200) + '...' 
+              : checkpoint.justification
+          })
+        }
+      }
+    }
+  }
+  
+  // Sort by score percentage (best first) and take top 6
+  return insights
+    .sort((a, b) => (b.score / b.maxScore) - (a.score / a.maxScore))
+    .slice(0, 6)
+}
 
 export default function TranscriptPanel({ 
   transcript, 
+  w4Report,
   currentTime = 0, 
-  onTimestampClick 
+  onTimestampClick,
+  onGenerateTranscript,
+  isGenerating = false,
+  generatingProgress = null,
+  isLoading = false,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState('')
   const [displayCount, setDisplayCount] = useState(ITEMS_PER_PAGE)
+  const [showFullTranscript] = useState(false)
   const activeEntryRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // Extract key insights from W4 report
+  const keyInsights = useMemo(() => extractKeyInsights(w4Report), [w4Report])
 
   // Parse transcript - supports both plain text and JSON formats
   const entries: TranscriptEntry[] = useMemo(() => {
@@ -62,19 +113,15 @@ export default function TranscriptPanel({
       // Not JSON, continue to plain text parsing
     }
     
-    // Parse plain text format:
-    // HH:MM:SS - Speaker Name
-    //       What they said...
+    // Parse plain text format
     const result: TranscriptEntry[] = []
     const lines = transcript.split('\n')
     let currentEntry: { speaker: string; timestamp: string; text: string[] } | null = null
     
     for (const line of lines) {
-      // Match timestamp line: "00:00:00 - Speaker Name" or "0:00 - Speaker"
       const timestampMatch = line.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(.+)$/)
       
       if (timestampMatch) {
-        // Save previous entry
         if (currentEntry) {
           result.push({
             speaker: currentEntry.speaker,
@@ -82,19 +129,16 @@ export default function TranscriptPanel({
             text: currentEntry.text.join(' ').trim()
           })
         }
-        // Start new entry
         currentEntry = {
           timestamp: timestampMatch[1],
           speaker: timestampMatch[2].trim(),
           text: []
         }
       } else if (currentEntry && line.trim()) {
-        // Add text to current entry
         currentEntry.text.push(line.trim())
       }
     }
     
-    // Don't forget the last entry
     if (currentEntry) {
       result.push({
         speaker: currentEntry.speaker,
@@ -103,7 +147,6 @@ export default function TranscriptPanel({
       })
     }
     
-    // If no entries parsed, show raw transcript
     if (result.length === 0 && transcript.trim()) {
       return [{ speaker: 'Transcript', text: transcript, timestamp: '0:00' }]
     }
@@ -121,20 +164,17 @@ export default function TranscriptPanel({
     )
   }, [entries, searchQuery])
 
-  // Paginated entries - only show first N items
   const paginatedEntries = useMemo(() => {
     return filteredEntries.slice(0, displayCount)
   }, [filteredEntries, displayCount])
 
   const hasMore = filteredEntries.length > displayCount
   
-  // Handle search change with pagination reset
   const handleSearchChange = (value: string) => {
     setSearchQuery(value)
-    setDisplayCount(ITEMS_PER_PAGE) // Reset pagination when searching
+    setDisplayCount(ITEMS_PER_PAGE)
   }
 
-  // Find current entry based on playback time
   const currentEntryIndex = useMemo(() => {
     for (let i = entries.length - 1; i >= 0; i--) {
       if (parseTimestamp(entries[i].timestamp) <= currentTime) {
@@ -144,63 +184,199 @@ export default function TranscriptPanel({
     return 0
   }, [entries, currentTime])
 
-  // Auto-scroll to current entry
   useEffect(() => {
     if (activeEntryRef.current && !searchQuery) {
       activeEntryRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
   }, [currentEntryIndex, searchQuery])
 
+  const hasTranscript = entries.length > 0
+  const hasKeyInsights = keyInsights.length > 0
+  const showKeyInsightsView = !hasTranscript && hasKeyInsights && !showFullTranscript && !isGenerating
+
   return (
     <div className="h-full flex flex-col bg-gray-900">
       {/* Header */}
       <div className="flex-shrink-0 border-b border-gray-800">
-        <div className="px-4 py-3">
-          <h3 className="text-sm font-medium text-white">TRANSCRIPT</h3>
+        <div className="px-4 py-3 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-white">
+            {hasTranscript ? 'TRANSCRIPT' : 'KEY QUOTES'}
+          </h3>
+          {hasTranscript && (
+            <span className="text-xs text-gray-500">{entries.length} entries</span>
+          )}
         </div>
 
-        {/* Search */}
-        <div className="p-2">
-          <div className="relative">
-            <svg
-              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              type="text"
-              placeholder="Search transcript..."
-              value={searchQuery}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
-            />
+        {/* Search - only show if we have transcript */}
+        {hasTranscript && (
+          <div className="p-2">
+            <div className="relative">
+              <svg
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search transcript..."
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Content */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0">
-        <div className="divide-y divide-gray-800/50">
-          {filteredEntries.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              {searchQuery ? 'No matches found' : 'No transcript available'}
+        
+        {/* Key Insights View (when no full transcript) */}
+        {showKeyInsightsView && (
+          <div className="p-4 pb-24"> {/* Extra padding bottom for sticky button */}
+            {/* Key Insights Header */}
+            <div className="mb-4 p-3 bg-gradient-to-r from-amber-500/10 to-orange-500/10 rounded-lg border border-amber-500/20">
+              <div className="flex items-center gap-2 mb-1">
+                <svg className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+                <span className="text-sm font-medium text-amber-400">Top Performance Highlights</span>
+              </div>
+              <p className="text-xs text-gray-400">
+                Best scoring checkpoints from W4 analysis
+              </p>
             </div>
-          ) : (
-            <>
-            {/* Show item count */}
+
+            {/* Insights List */}
+            <div className="space-y-3">
+              {keyInsights.map((item, idx) => (
+                <div key={idx} className="p-3 bg-gray-800/50 rounded-lg border border-gray-700/50 hover:bg-gray-800/70 transition-colors">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-white bg-amber-500/80 px-2 py-0.5 rounded">
+                        {item.phase}
+                      </span>
+                      <span className="text-xs text-gray-400 truncate max-w-[140px]">{item.checkpoint}</span>
+                    </div>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                      item.score === item.maxScore ? 'bg-green-500/20 text-green-400' :
+                      item.score >= item.maxScore * 0.7 ? 'bg-amber-500/20 text-amber-400' :
+                      'bg-gray-700 text-gray-400'
+                    }`}>
+                      {item.score}/{item.maxScore}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-300 leading-relaxed">{item.insight}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Empty State - No Insights & No Transcript */}
+        {!hasTranscript && !hasKeyInsights && !isGenerating && !isLoading && (
+          <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+            <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center mb-4">
+              <svg className="w-8 h-8 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            </div>
+            <h4 className="text-white font-medium mb-2">No Transcript Yet</h4>
+            <p className="text-gray-500 text-sm mb-6 max-w-xs">
+              Generate a full transcript of this call to read and search through the conversation.
+            </p>
+            {onGenerateTranscript && (
+              <button
+                onClick={onGenerateTranscript}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-black font-medium rounded-lg text-sm transition-colors flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+                Generate Transcript
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Generating State */}
+        {isGenerating && (
+          <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+            {/* Animated icon */}
+            <div className="relative w-20 h-20 mb-6">
+              <div className="absolute inset-0 rounded-full bg-amber-500/20 animate-ping" />
+              <div className="relative w-full h-full rounded-full bg-gradient-to-br from-amber-500/30 to-orange-500/30 border-2 border-amber-500/50 flex items-center justify-center">
+                <svg className="w-10 h-10 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              </div>
+            </div>
+
+            <h4 className="text-white font-semibold text-lg mb-2">Generating Transcript</h4>
+            
+            {/* Progress info */}
+            <div className="w-full max-w-xs space-y-3">
+              {/* Status message */}
+              <div className="px-4 py-2 bg-gray-800/50 rounded-lg">
+                <p className="text-amber-400 text-sm font-medium">
+                  {generatingProgress || 'Starting transcript generation...'}
+                </p>
+              </div>
+
+              {/* Visual progress bar */}
+              <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-500"
+                  style={{ 
+                    width: generatingProgress?.includes('chars') 
+                      ? `${Math.min(95, parseInt(generatingProgress.match(/(\d+)k/)?.[1] || '0') * 2)}%` 
+                      : '15%' 
+                  }} 
+                />
+              </div>
+
+              {/* Live stats */}
+              {generatingProgress?.includes('chars') && (
+                <div className="flex items-center justify-center gap-4 text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                    <span className="text-green-400">Streaming</span>
+                  </div>
+                  <div className="text-gray-500">
+                    ~{Math.round(parseInt(generatingProgress.match(/(\d+)k/)?.[1] || '0') * 0.2)} words
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-gray-600 mt-6">
+              AI is listening to the entire recording...
+            </p>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {isLoading && !isGenerating && (
+          <div className="flex flex-col items-center justify-center h-full p-8">
+            <div className="w-8 h-8 border-2 border-gray-700 border-t-amber-500 rounded-full animate-spin" />
+            <p className="text-gray-500 text-sm mt-4">Loading transcript...</p>
+          </div>
+        )}
+
+        {/* Full Transcript Content */}
+        {hasTranscript && !isGenerating && !isLoading && (
+          <div className="divide-y divide-gray-800/50">
             <div className="px-4 py-2 text-xs text-gray-500 bg-gray-800/30">
               Showing {paginatedEntries.length} of {filteredEntries.length} entries
             </div>
             {paginatedEntries.map((entry, idx) => {
               const isActive = idx === currentEntryIndex && !searchQuery
-              // Determine which field is name vs text
               const speakerLooksLikeName = entry.speaker.length < 20 && /^[A-Za-z\s]+$/.test(entry.speaker)
               const textLooksLikeName = entry.text.length < 20 && /^[A-Za-z\s]+$/.test(entry.text)
               
-              // If text looks like name (short, only letters), use it as name
               const speakerName = textLooksLikeName && !speakerLooksLikeName ? entry.text : entry.speaker
               const spokenText = textLooksLikeName && !speakerLooksLikeName ? entry.speaker : entry.text
               const styles = getSpeakerStyles(speakerName)
@@ -212,32 +388,19 @@ export default function TranscriptPanel({
                   onClick={() => onTimestampClick?.(entry.timestamp)}
                   className={`px-4 py-3 transition-colors cursor-pointer ${isActive ? 'bg-gray-800/30' : 'hover:bg-gray-800/20'}`}
                 >
-                  {/* Speaker name with Avatar */}
                   <div className="flex items-center gap-3 mb-1">
-                    {/* Avatar - initials from name */}
                     <div className={`w-8 h-8 rounded-full ${styles.avatar} flex items-center justify-center text-xs font-bold text-white flex-shrink-0`}>
                       {getInitials(speakerName)}
                     </div>
-                    
-                    {/* Speaker name and timestamp */}
                     <div className="flex items-center gap-2">
-                      <span className="text-white font-medium text-sm">
-                        {speakerName}
-                      </span>
-                      <span className="text-xs text-gray-500 font-mono">
-                        {entry.timestamp}
-                      </span>
+                      <span className="text-white font-medium text-sm">{speakerName}</span>
+                      <span className="text-xs text-gray-500 font-mono">{entry.timestamp}</span>
                     </div>
                   </div>
-                  
-                  {/* Text - gray, below */}
-                  <p className="text-gray-400 text-sm leading-relaxed pl-11">
-                    {spokenText}
-                  </p>
+                  <p className="text-gray-400 text-sm leading-relaxed pl-11">{spokenText}</p>
                 </div>
               )
             })}
-            {/* Load More button */}
             {hasMore && (
               <div className="p-4">
                 <button
@@ -248,10 +411,27 @@ export default function TranscriptPanel({
                 </button>
               </div>
             )}
-            </>
-          )}
-        </div>
+          </div>
+        )}
       </div>
+
+      {/* Sticky Footer - Generate Transcript Button (when showing key insights) */}
+      {showKeyInsightsView && onGenerateTranscript && (
+        <div className="flex-shrink-0 p-4 border-t border-gray-800 bg-gray-900/95 backdrop-blur">
+          <button
+            onClick={onGenerateTranscript}
+            className="w-full px-4 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-black font-medium rounded-lg text-sm transition-all flex items-center justify-center gap-2 shadow-lg"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+            </svg>
+            Generate Full Transcript
+          </button>
+          <p className="text-xs text-gray-500 text-center mt-2">
+            Get the complete word-by-word transcript
+          </p>
+        </div>
+      )}
     </div>
   )
 }

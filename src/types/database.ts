@@ -183,6 +183,12 @@ export interface W4QuickWin {
   points_worth: number
 }
 
+// Area for improvement item
+export interface W4AreaForImprovement {
+  area: string
+  recommendation: string
+}
+
 // Rank assessment
 export interface W4RankAssessment {
   current_rank: W4Rating
@@ -216,7 +222,7 @@ export interface W4Report {
   
   // Analysis sections
   what_done_right: string[]
-  areas_for_improvement: string[]
+  areas_for_improvement: W4AreaForImprovement[]
   weakest_elements: string[]
   
   // Coaching
@@ -285,6 +291,8 @@ export interface TranscriptEntry {
 // AUDIO ANALYSIS (Main interface)
 // ============================================================================
 
+export type ProcessingStage = 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error'
+
 export interface AudioAnalysis {
   id: string
   recording_id: string
@@ -294,6 +302,7 @@ export interface AudioAnalysis {
   
   // Processing status
   processing_status: AnalysisStatus
+  processing_stage: ProcessingStage  // 2-step flow: transcribing -> analyzing
   total_chunks: number
   completed_chunks: number
   current_chunk_message: string | null

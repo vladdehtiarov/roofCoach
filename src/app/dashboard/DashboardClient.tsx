@@ -19,6 +19,8 @@ interface RecordingWithUrl extends RecordingWithTranscript {
   audioUrl?: string
   tags?: Tag[]
   analysis_status?: 'pending' | 'processing' | 'done' | 'error' | 'queued' | null
+  analysis_stage?: 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error' | null
+  has_w4_report?: boolean
 }
 
 type FilterType = 'active' | 'archived' | 'all'
@@ -96,17 +98,34 @@ export default function DashboardClient({ user }: { user: User }) {
             console.log('Analysis update:', payload)
             // Update the recording's analysis status
             if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-              const analysis = payload.new as { recording_id: string; processing_status: string; title?: string }
-              setRecordings(prev => prev.map(r => 
-                r.id === analysis.recording_id 
-                  ? { 
-                      ...r, 
-                      analysis_status: analysis.processing_status as RecordingWithUrl['analysis_status'],
-                      has_analysis: analysis.processing_status === 'done',
-                      analysis_title: analysis.title || r.analysis_title,
-                    }
-                  : r
-              ))
+              const analysis = payload.new as { 
+                recording_id: string; 
+                processing_status?: string; 
+                processing_stage?: string;
+                w4_report?: unknown;
+                title?: string 
+              }
+              setRecordings(prev => prev.map(r => {
+                if (r.id !== analysis.recording_id) return r
+                
+                // Only update fields if they're actually present in the payload
+                return { 
+                  ...r, 
+                  analysis_status: analysis.processing_status !== undefined 
+                    ? analysis.processing_status as RecordingWithUrl['analysis_status']
+                    : r.analysis_status,
+                  analysis_stage: analysis.processing_stage !== undefined
+                    ? analysis.processing_stage as RecordingWithUrl['analysis_stage']
+                    : r.analysis_stage,
+                  has_w4_report: analysis.w4_report !== undefined
+                    ? !!analysis.w4_report
+                    : r.has_w4_report,
+                  has_analysis: analysis.w4_report !== undefined 
+                    ? !!analysis.w4_report 
+                    : r.has_analysis,
+                  analysis_title: analysis.title || r.analysis_title,
+                }
+              }))
             }
           }
         )
@@ -260,7 +279,7 @@ export default function DashboardClient({ user }: { user: User }) {
       const [analysesResult, tagsResult] = await Promise.all([
         supabase
           .from('audio_analyses')
-          .select('recording_id, processing_status')
+          .select('recording_id, processing_status, processing_stage, w4_report')
           .in('recording_id', recordingIds),
         supabase
           .from('recording_tags')
@@ -269,7 +288,11 @@ export default function DashboardClient({ user }: { user: User }) {
       ])
 
       const analysisMap = new Map(
-        (analysesResult.data || []).map(a => [a.recording_id, a.processing_status])
+        (analysesResult.data || []).map(a => [a.recording_id, {
+          status: a.processing_status,
+          stage: a.processing_stage,
+          hasW4: !!a.w4_report,
+        }])
       )
 
       // Group tags by recording_id
@@ -288,9 +311,16 @@ export default function DashboardClient({ user }: { user: User }) {
       // DON'T load signed URLs upfront - lazy load them when needed
       // This reduces initial load from O(N) requests to O(1)
       const recordingsWithData = (data || []).map((recording) => {
-        const analysis_status = analysisMap.get(recording.id) as RecordingWithUrl['analysis_status'] || null
+        const analysisInfo = analysisMap.get(recording.id)
         const tags = tagsMap.get(recording.id) || []
-        return { ...recording, audioUrl: undefined, analysis_status, tags }
+        return { 
+          ...recording, 
+          audioUrl: undefined, 
+          analysis_status: analysisInfo?.status as RecordingWithUrl['analysis_status'] || null,
+          analysis_stage: analysisInfo?.stage as RecordingWithUrl['analysis_stage'] || null,
+          has_w4_report: analysisInfo?.hasW4 || false,
+          tags,
+        }
       })
       
       setRecordings(recordingsWithData)
@@ -675,7 +705,7 @@ export default function DashboardClient({ user }: { user: User }) {
   }
 
   const getStatusBadge = (recording: RecordingWithUrl) => {
-    const { status, is_archived, has_analysis, analysis_status } = recording
+    const { status, is_archived, has_analysis, analysis_status, analysis_stage, has_w4_report } = recording
     
     // Archived takes priority
     if (is_archived) {
@@ -703,11 +733,29 @@ export default function DashboardClient({ user }: { user: User }) {
       )
     }
     
-    // Analysis status (if file upload is done)
-    if (analysis_status === 'processing') {
+    // Transcribing (check stage first, more specific)
+    if (analysis_stage === 'transcribing') {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400 animate-pulse">
+          🎙️ Transcribing...
+        </span>
+      )
+    }
+    
+    // W4 Analyzing
+    if (analysis_stage === 'analyzing') {
       return (
         <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-400 animate-pulse">
-          🔄 Analyzing...
+          🤖 Analyzing...
+        </span>
+      )
+    }
+    
+    // Legacy: processing without specific stage
+    if (analysis_status === 'processing' && !analysis_stage) {
+      return (
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-400 animate-pulse">
+          🔄 Processing...
         </span>
       )
     }
@@ -721,8 +769,8 @@ export default function DashboardClient({ user }: { user: User }) {
       )
     }
     
-    // Has completed analysis
-    if (has_analysis) {
+    // Has completed W4 analysis
+    if (has_w4_report || has_analysis) {
       return (
         <span className="px-2 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400">
           ✨ Analyzed
