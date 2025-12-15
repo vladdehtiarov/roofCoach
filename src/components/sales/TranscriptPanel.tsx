@@ -7,8 +7,6 @@ interface Props {
   transcript: string | TranscriptEntry[] | null
   currentTime?: number
   onTimestampClick?: (timestamp: string) => void
-  bookmarks?: { timestamp: string; text: string; label?: string }[]
-  onAddComment?: (text: string) => void
 }
 
 function parseTimestamp(ts: string): number {
@@ -44,13 +42,9 @@ const ITEMS_PER_PAGE = 50 // Only render 50 items at a time
 export default function TranscriptPanel({ 
   transcript, 
   currentTime = 0, 
-  onTimestampClick, 
-  bookmarks = [],
-  onAddComment 
+  onTimestampClick 
 }: Props) {
-  const [activeTab, setActiveTab] = useState<'transcript' | 'bookmarks'>('transcript')
   const [searchQuery, setSearchQuery] = useState('')
-  const [commentText, setCommentText] = useState('')
   const [displayCount, setDisplayCount] = useState(ITEMS_PER_PAGE)
   const activeEntryRef = useRef<HTMLDivElement>(null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -157,192 +151,105 @@ export default function TranscriptPanel({
     }
   }, [currentEntryIndex, searchQuery])
 
-  const handleSubmitComment = () => {
-    if (commentText.trim() && onAddComment) {
-      onAddComment(commentText.trim())
-      setCommentText('')
-    }
-  }
-
   return (
-    <div className="h-full flex flex-col bg-slate-900">
-      {/* Header with Tabs */}
-      <div className="flex-shrink-0 border-b border-slate-700/50">
-        <div className="flex">
-          <button
-            onClick={() => setActiveTab('transcript')}
-            className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-              activeTab === 'transcript'
-                ? 'text-white border-b-2 border-amber-500'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            TRANSCRIPT
-          </button>
-          <button
-            onClick={() => setActiveTab('bookmarks')}
-            className={`flex-1 px-4 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-              activeTab === 'bookmarks'
-                ? 'text-white border-b-2 border-amber-500'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Bookmarks
-            {bookmarks.length > 0 && (
-              <span className="px-1.5 py-0.5 bg-slate-700 rounded text-xs">
-                {bookmarks.length}
-              </span>
-            )}
-          </button>
+    <div className="h-full flex flex-col bg-gray-900">
+      {/* Header */}
+      <div className="flex-shrink-0 border-b border-gray-800">
+        <div className="px-4 py-3">
+          <h3 className="text-sm font-medium text-white">TRANSCRIPT</h3>
         </div>
 
         {/* Search */}
-        {activeTab === 'transcript' && (
-          <div className="p-2">
-            <div className="relative">
-              <svg
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <input
-                type="text"
-                placeholder="Search transcript..."
-                value={searchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
-              />
-            </div>
+        <div className="p-2">
+          <div className="relative">
+            <svg
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Search transcript..."
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+            />
           </div>
-        )}
+        </div>
       </div>
 
       {/* Content */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0">
-        {activeTab === 'transcript' ? (
-          <div className="divide-y divide-slate-800/50">
-            {filteredEntries.length === 0 ? (
-              <div className="text-center py-12 text-slate-500">
-                {searchQuery ? 'No matches found' : 'No transcript available'}
-              </div>
-            ) : (
-              <>
-              {/* Show item count */}
-              <div className="px-4 py-2 text-xs text-slate-500 bg-slate-800/30">
-                Showing {paginatedEntries.length} of {filteredEntries.length} entries
-              </div>
-              {paginatedEntries.map((entry, idx) => {
-                const isActive = idx === currentEntryIndex && !searchQuery
-                // Determine which field is name vs text
-                // Name is usually shorter and contains only letters/spaces
-                const speakerLooksLikeName = entry.speaker.length < 20 && /^[A-Za-z\s]+$/.test(entry.speaker)
-                const textLooksLikeName = entry.text.length < 20 && /^[A-Za-z\s]+$/.test(entry.text)
-                
-                // If text looks like name (short, only letters), use it as name
-                const speakerName = textLooksLikeName && !speakerLooksLikeName ? entry.text : entry.speaker
-                const spokenText = textLooksLikeName && !speakerLooksLikeName ? entry.speaker : entry.text
-                const styles = getSpeakerStyles(speakerName)
-                
-                return (
-                  <div
-                    key={idx}
-                    ref={isActive ? activeEntryRef : null}
-                    className={`px-4 py-3 transition-colors ${isActive ? 'bg-slate-800/30' : 'hover:bg-slate-800/20'}`}
-                  >
-                    {/* Speaker name with Avatar */}
-                    <div className="flex items-center gap-3 mb-1">
-                      {/* Avatar - initials from name */}
-                      <div className={`w-8 h-8 rounded-full ${styles.avatar} flex items-center justify-center text-xs font-bold text-white flex-shrink-0`}>
-                        {getInitials(speakerName)}
-                      </div>
-                      
-                      {/* Speaker name - white */}
+        <div className="divide-y divide-gray-800/50">
+          {filteredEntries.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              {searchQuery ? 'No matches found' : 'No transcript available'}
+            </div>
+          ) : (
+            <>
+            {/* Show item count */}
+            <div className="px-4 py-2 text-xs text-gray-500 bg-gray-800/30">
+              Showing {paginatedEntries.length} of {filteredEntries.length} entries
+            </div>
+            {paginatedEntries.map((entry, idx) => {
+              const isActive = idx === currentEntryIndex && !searchQuery
+              // Determine which field is name vs text
+              const speakerLooksLikeName = entry.speaker.length < 20 && /^[A-Za-z\s]+$/.test(entry.speaker)
+              const textLooksLikeName = entry.text.length < 20 && /^[A-Za-z\s]+$/.test(entry.text)
+              
+              // If text looks like name (short, only letters), use it as name
+              const speakerName = textLooksLikeName && !speakerLooksLikeName ? entry.text : entry.speaker
+              const spokenText = textLooksLikeName && !speakerLooksLikeName ? entry.speaker : entry.text
+              const styles = getSpeakerStyles(speakerName)
+              
+              return (
+                <div
+                  key={idx}
+                  ref={isActive ? activeEntryRef : null}
+                  onClick={() => onTimestampClick?.(entry.timestamp)}
+                  className={`px-4 py-3 transition-colors cursor-pointer ${isActive ? 'bg-gray-800/30' : 'hover:bg-gray-800/20'}`}
+                >
+                  {/* Speaker name with Avatar */}
+                  <div className="flex items-center gap-3 mb-1">
+                    {/* Avatar - initials from name */}
+                    <div className={`w-8 h-8 rounded-full ${styles.avatar} flex items-center justify-center text-xs font-bold text-white flex-shrink-0`}>
+                      {getInitials(speakerName)}
+                    </div>
+                    
+                    {/* Speaker name and timestamp */}
+                    <div className="flex items-center gap-2">
                       <span className="text-white font-medium text-sm">
                         {speakerName}
                       </span>
-                    </div>
-                    
-                    {/* Text - gray, below */}
-                    <p className="text-slate-400 text-sm leading-relaxed pl-11">
-                      {spokenText}
-                    </p>
-                  </div>
-                )
-              })}
-              {/* Load More button */}
-              {hasMore && (
-                <div className="p-4">
-                  <button
-                    onClick={() => setDisplayCount(prev => prev + ITEMS_PER_PAGE)}
-                    className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    Load More ({filteredEntries.length - displayCount} remaining)
-                  </button>
-                </div>
-              )}
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="p-4 space-y-3">
-            {bookmarks.length === 0 ? (
-              <div className="text-center py-12 text-slate-500">
-                <div className="w-12 h-12 mx-auto rounded-full bg-slate-800 flex items-center justify-center mb-3">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                  </svg>
-                </div>
-                <p>No bookmarks yet</p>
-                <p className="text-xs text-slate-600 mt-1">Click timestamps to add bookmarks</p>
-              </div>
-            ) : (
-              bookmarks.map((bookmark, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => onTimestampClick?.(bookmark.timestamp)}
-                  className="w-full text-left p-3 bg-slate-800/50 rounded-lg hover:bg-slate-800 transition-colors group"
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-mono text-amber-400 group-hover:text-amber-300">
-                      {bookmark.timestamp}
-                    </span>
-                    {bookmark.label && (
-                      <span className="px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-300">
-                        {bookmark.label}
+                      <span className="text-xs text-gray-500 font-mono">
+                        {entry.timestamp}
                       </span>
-                    )}
+                    </div>
                   </div>
-                  <p className="text-slate-300 text-sm">{bookmark.text}</p>
+                  
+                  {/* Text - gray, below */}
+                  <p className="text-gray-400 text-sm leading-relaxed pl-11">
+                    {spokenText}
+                  </p>
+                </div>
+              )
+            })}
+            {/* Load More button */}
+            {hasMore && (
+              <div className="p-4">
+                <button
+                  onClick={() => setDisplayCount(prev => prev + ITEMS_PER_PAGE)}
+                  className="w-full py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Load More ({filteredEntries.length - displayCount} remaining)
                 </button>
-              ))
+              </div>
             )}
-          </div>
-        )}
-      </div>
-
-      {/* Comment Input - Always at bottom */}
-      <div className="flex-shrink-0 border-t border-slate-700/50 p-3 bg-slate-900">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Leave a public comment on recording"
-            value={commentText}
-            onChange={(e) => setCommentText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSubmitComment()}
-            className="flex-1 px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-full text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
-          />
-          <button
-            onClick={handleSubmitComment}
-            disabled={!commentText.trim()}
-            className="p-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-full transition-colors"
-          >
-            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
-          </button>
+            </>
+          )}
         </div>
       </div>
     </div>

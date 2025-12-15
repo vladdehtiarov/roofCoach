@@ -137,128 +137,144 @@ export interface TranscriptSection {
 export type AnalysisStatus = 'pending' | 'processing' | 'done' | 'error'
 
 // ============================================================================
-// SALES COACHING TYPES (Siro-like structure)
+// W4 SALES SYSTEM TYPES (RoofCoach methodology)
 // ============================================================================
 
-export interface ScorecardItem {
+// Performance ratings
+export type W4Rating = 'MVP' | 'Playmaker' | 'Starter' | 'Prospect' | 'Below Prospect'
+
+// Rating thresholds
+export const W4_RATING_THRESHOLDS = {
+  MVP: { min: 90, max: 100, color: '#22c55e' },           // Green
+  Playmaker: { min: 75, max: 89, color: '#3b82f6' },      // Blue
+  Starter: { min: 60, max: 74, color: '#eab308' },        // Yellow
+  Prospect: { min: 45, max: 59, color: '#f97316' },       // Orange
+  'Below Prospect': { min: 0, max: 44, color: '#ef4444' } // Red
+} as const
+
+// Checkpoint within a phase
+export interface W4Checkpoint {
   name: string
   score: number
-  timestamp?: string
-  notes?: string
-}
-
-export interface ScorecardCategory {
-  score: number
-  weight: number
-  items: ScorecardItem[]
-}
-
-export interface Scorecard {
-  total: number
-  process: ScorecardCategory
-  skills: ScorecardCategory
-  communication: ScorecardCategory
-}
-
-export interface InsightWithTimestamps {
-  text: string
-  timestamps: string[]
-  type?: 'price' | 'timing' | 'trust' | 'other'
-}
-
-export interface CustomerAnalysis {
-  // Flexible field names (old and new prompt formats)
-  needs_motivation?: InsightWithTimestamps[]
-  needs?: InsightWithTimestamps[]
-  pain_points: InsightWithTimestamps[]
-  objections: InsightWithTimestamps[]
-  outcomes_next_steps?: InsightWithTimestamps[]
-  next_steps?: InsightWithTimestamps[]
-}
-
-export interface SpeakerAnalytics {
-  // Flexible field names
-  conversation_time?: string
-  rep_speaking_time?: string
-  customer_speaking_time?: string
-  speaker_share_rep?: number
-  rep_talk_percent?: number
-  customer_talk_percent?: number
-  pacing_wpm?: number
-  questions_asked?: number
-  questions_by_rep?: number
-  questions_received?: number
-  longest_monologue: string
-  exchanges: number
-}
-
-export interface ReEngage {
-  recap: string
-  first_price_quote?: string
-  final_price_quote?: string
-  price_quoted?: string  // Alternative field name
-  financing?: string
-  commitment?: string
-  main_objection: string
-  emotional_tie?: string
-  emotional_driver?: string  // Alternative field name
-  recommended_action: string
-  suggested_message?: string
-  follow_up_message?: string  // Alternative field name
-}
-
-// Coaching insights
-export interface Coaching {
-  strengths: string[]
-  improvements: string[]
-  quick_wins: string[]
-}
-
-// Comprehensive Report (WHY/WHAT/WHO/WHEN phases)
-export interface ReportCheckpoint {
-  name: string
-  score: number
-  max: number
+  max_score: number
   justification: string
 }
 
-export interface ReportPhase {
-  name: string
-  max_score: number
+// Phase (WHY, WHAT, WHO, WHEN)
+export interface W4Phase {
   score: number
-  checkpoints: ReportCheckpoint[]
+  max_score: number
+  checkpoints: W4Checkpoint[]
 }
 
-export interface ComprehensiveReport {
-  header: {
-    client_name: string
-    rep_name: string
-    company_name: string
-  }
-  overall_performance: {
-    total_score: number
-    max_score: number
-    rating: string
-    summary: string
-  }
+// Coaching recommendations structure
+export interface W4CoachingRecommendations {
+  rapport_building?: string
+  structured_communication?: string
+  tie_downs?: string
+  post_price_silence?: string
+  [key: string]: string | undefined  // Allow additional coaching topics
+}
+
+// Quick win item
+export interface W4QuickWin {
+  title: string
+  action: string
+  points_worth: number
+}
+
+// Rank assessment
+export interface W4RankAssessment {
+  current_rank: W4Rating
+  next_level_requirements: string
+}
+
+// Overall performance summary
+export interface W4OverallPerformance {
+  total_score: number
+  rating: W4Rating
+  summary: string
+}
+
+// Complete W4 Report structure
+export interface W4Report {
+  // Header info
+  client_name: string
+  rep_name: string
+  company_name: string
+  
+  // Overall performance
+  overall_performance: W4OverallPerformance
+  
+  // Four phases with checkpoints
   phases: {
-    why: ReportPhase
-    what: ReportPhase
-    who: ReportPhase
-    when: ReportPhase
+    why: W4Phase   // 38 max points, 6 checkpoints
+    what: W4Phase  // 27 max points, 4 checkpoints
+    who: W4Phase   // 25 max points, 3 checkpoints
+    when: W4Phase  // 10 max points, 2 checkpoints
   }
+  
+  // Analysis sections
   what_done_right: string[]
-  areas_for_improvement: { area: string; recommendation: string }[]
+  areas_for_improvement: string[]
   weakest_elements: string[]
-  coaching_recommendations: { topic: string; advice: string }[]
-  rank_assessment: {
-    current_rank: string
-    next_level: string
-    requirements: string[]
-  }
-  quick_wins: { change: string; impact: string }[]
+  
+  // Coaching
+  coaching_recommendations: W4CoachingRecommendations
+  rank_assessment: W4RankAssessment
+  quick_wins: W4QuickWin[]
 }
 
+// Helper function to get rating from score
+export function getW4Rating(score: number): W4Rating {
+  if (score >= 90) return 'MVP'
+  if (score >= 75) return 'Playmaker'
+  if (score >= 60) return 'Starter'
+  if (score >= 45) return 'Prospect'
+  return 'Below Prospect'
+}
+
+// Helper function to get rating color
+export function getW4RatingColor(rating: W4Rating): string {
+  return W4_RATING_THRESHOLDS[rating].color
+}
+
+// Phase metadata for UI
+export const W4_PHASE_CONFIG = {
+  why: { name: 'WHY', maxScore: 38, description: 'Building rapport and understanding needs' },
+  what: { name: 'WHAT', maxScore: 27, description: 'Presenting solutions and options' },
+  who: { name: 'WHO', maxScore: 25, description: 'Establishing company credibility' },
+  when: { name: 'WHEN', maxScore: 10, description: 'Closing and next steps' }
+} as const
+
+// Checkpoint names for each phase (fixed structure)
+export const W4_CHECKPOINTS = {
+  why: [
+    { name: 'Sitdown/Transition', maxScore: 5 },
+    { name: 'Rapport Building – FORM Method', maxScore: 5 },
+    { name: 'Assessment Questions (Q1–Q16)', maxScore: 12 },
+    { name: 'Inspection', maxScore: 3 },
+    { name: 'Present Findings', maxScore: 5 },
+    { name: 'Tie-Down WHY & Repair vs. Replace', maxScore: 8 }
+  ],
+  what: [
+    { name: 'Formal Presentation System', maxScore: 5 },
+    { name: 'System Options – FBAL Method', maxScore: 12 },
+    { name: 'Backup Recommendations/Visuals', maxScore: 5 },
+    { name: 'Tie-Down WHAT', maxScore: 5 }
+  ],
+  who: [
+    { name: 'Company Advantages', maxScore: 8 },
+    { name: 'Pyramid of Pain', maxScore: 8 },
+    { name: 'WHO Tie-Down', maxScore: 9 }
+  ],
+  when: [
+    { name: 'Price Presentation', maxScore: 5 },
+    { name: 'Post-Close Silence', maxScore: 5 }
+  ]
+} as const
+
+// Legacy types kept for backward compatibility (deprecated)
 export interface TranscriptEntry {
   speaker: 'Rep' | 'Customer' | string
   text: string
@@ -273,48 +289,39 @@ export interface AudioAnalysis {
   id: string
   recording_id: string
   
-  // Full transcript (JSON string of TranscriptEntry[])
+  // Full transcript (plain text format)
   transcript: string
   
-  // Chunked sections with progress (legacy)
-  sections: TranscriptSection[]
+  // Processing status
   processing_status: AnalysisStatus
   total_chunks: number
   completed_chunks: number
   current_chunk_message: string | null
   error_message: string | null
   
-  // Headlines/Summary
+  // Headlines/Summary (from W4 report)
   title: string
   summary: string
   
-  // AI Notes - markdown formatted article (legacy)
-  ai_notes: string | null
-  
-  // Timeline with topics (legacy)
-  timeline: TimelineSegment[]
-  
-  // Key topics discussed
-  main_topics: string[]
-  
-  // Glossary of terms (legacy)
-  glossary: GlossaryTerm[]
-  
-  // AI Insights & Recommendations (legacy)
-  insights: AnalysisInsight[]
-  
-  // Conclusion (legacy)
-  conclusion: string
-  
   // ============================================
-  // NEW: Sales Coaching Fields (Siro-like)
+  // W4 Sales System Report
   // ============================================
-  scorecard: Scorecard | null
-  customer_analysis: CustomerAnalysis | null
-  speaker_analytics: SpeakerAnalytics | null
-  re_engage: ReEngage | null
-  coaching: Coaching | null
-  comprehensive_report: ComprehensiveReport | null
+  w4_report: W4Report | null
+  
+  // Legacy fields (kept for backward compatibility, will be deprecated)
+  sections?: TranscriptSection[]
+  ai_notes?: string | null
+  timeline?: TimelineSegment[]
+  main_topics?: string[]
+  glossary?: GlossaryTerm[]
+  insights?: AnalysisInsight[]
+  conclusion?: string
+  scorecard?: unknown
+  customer_analysis?: unknown
+  speaker_analytics?: unknown
+  re_engage?: unknown
+  coaching?: unknown
+  comprehensive_report?: unknown
   
   // Metadata
   duration_analyzed: number | null

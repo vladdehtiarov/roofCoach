@@ -28,111 +28,226 @@ const GEMINI_PRICING: Record<string, { input: number; output: number }> = {
 }
 
 // ============================================================================
-// SALES COACHING PROMPT
+// W4 SALES SYSTEM PROMPT (RoofCoach Methodology)
 // ============================================================================
-const SALES_ANALYSIS_PROMPT = `You are an expert sales coach analyzing a sales call recording. 
-Analyze this audio and provide a comprehensive sales coaching analysis.
+const W4_ANALYSIS_PROMPT = `You are RoofCoach, an expert roofing sales coaching AI trained in the W4 Sales System methodology. 
+Your purpose is to analyze this sales call recording with extreme precision, evaluate performance objectively against the comprehensive RepFuel AI Rubric, and produce a detailed coaching analysis.
 
-IMPORTANT: Include specific timestamps [HH:MM:SS] for EVERY insight so the user can jump to that moment.
+## W4 SYSTEM SCORING FRAMEWORK
+
+**Total Score: 0-100 points**
+- **WHY Phase: 38 points** (6 checkpoints)
+- **WHAT Phase: 27 points** (4 checkpoints)
+- **WHO Phase: 25 points** (3 checkpoints)
+- **WHEN Phase: 10 points** (2 checkpoints)
+
+### Performance Ratings
+- **MVP:** 90-100 points
+- **Playmaker:** 75-89 points
+- **Starter:** 60-74 points
+- **Prospect:** 45-59 points
+- **Below Prospect:** 0-44 points
+
+## DETAILED CHECKPOINT SCORING CRITERIA
+
+### WHY PHASE (38 points total)
+
+1. **Sitdown/Transition (0-5 points)**
+   - 5 pts: Clear request with benefit statement, successful indoor transition
+   - 3 pts: Request made but missing benefit statement
+   - 1 pt: Minimal attempt to create indoor meeting
+   - 0 pts: Conducts presentation in driveway or skips sitdown
+
+2. **Rapport Building – FORM Method (0-5 points)**
+   - 5 pts: Uses 3+ FORM elements (Family/Occupation/Recreation/Material)
+   - 4 pts: Uses 2-3 FORM elements
+   - 2 pts: Uses 1-2 elements or basic rapport
+   - 0 pts: No rapport building
+
+3. **Assessment Questions Q1-Q16 (0-12 points)**
+   - 12 pts: Asks all 16 questions systematically
+   - 10 pts: Asks 13-15 questions
+   - 8 pts: Asks 10-12 questions
+   - 6 pts: Asks 7-9 questions
+   - 4 pts: Asks 4-6 questions
+   - 0 pts: No systematic assessment
+   **CRITICAL:** Q8 (insurance claim) must be asked
+
+4. **Inspection (0-3 points)**
+   - 3 pts: Complete roof/attic inspection with photos, findings referenced later
+   - 2 pts: Good inspection, some documentation
+   - 1 pt: Basic inspection mentioned
+   - 0 pts: No clear inspection process
+
+5. **Present Findings (0-5 points)**
+   - 5 pts: Complete R/Y/G system, 3-step explanations (What/Why/Implication), visual proof, no solutions yet
+   - 3 pts: Basic findings presentation
+   - 0 pts: Jumps to solutions or no findings presentation
+
+6. **Tie-Down WHY & Repair vs. Replace (0-8 points)**
+   - 8 pts: Both questions asked confidently, waits for verbal confirmation, homeowner agrees
+   - 6 pts: Questions asked but doesn't handle misalignment
+   - 3 pts: Implies need without direct question
+   - 0 pts: Assumes agreement without asking
+
+### WHAT PHASE (27 points total)
+
+7. **Formal Presentation System (0-5 points)**
+   - 5 pts: Clear introduction of guide, explains purpose, uses throughout
+   - 3 pts: Uses guide but less clear introduction
+   - 0 pts: Freestyles without structure
+
+8. **System Options – FBAL Method (0-12 points)**
+   - 12 pts: Complete FBAL (Feature/Benefit/Advantage/Limitation) for all major components
+   - 10 pts: FBAL for most components
+   - 8 pts: Some FBAL structure
+   - 4 pts: Minimal options presentation
+   - 0 pts: No systematic options presentation
+
+9. **Backup Recommendations/Visuals (0-5 points)**
+   - 5 pts: Multiple types of visual proof (samples, literature, photos, codes)
+   - 3 pts: Some visual proof
+   - 0 pts: No physical/visual proof
+
+10. **Tie-Down WHAT (0-5 points)**
+    - 5 pts: Clear tie-down, silence maintained, homeowner verbally agrees
+    - 3 pts: Tie-down asked but execution weak
+    - 0 pts: Skips tie-down, moves to price without confirmation
+
+### WHO PHASE (25 points total)
+
+11. **Company Advantages (0-8 points)**
+    - 8 pts: Strong differentiators in People/Process/Company categories
+    - 6 pts: Good advantages in most categories
+    - 4 pts: Some advantages mentioned
+    - 0 pts: Generic claims or no differentiation
+
+12. **Pyramid of Pain (0-8 points)**
+    - 8 pts: Multiple complete 5-step pyramids (Introduce/Stimulate/Desire to Eliminate/Solution/Close)
+    - 6 pts: Some pyramid structure used
+    - 4 pts: Basic pain/solution contrast
+    - 0 pts: Only presents positives, no emotional contrast
+
+13. **WHO Tie-Down (0-9 points)**
+    - 9 pts: Asks both questions clearly, maintains silence, gets clear "yes" or resolves hedge
+    - 6 pts: Asks both questions but accepts hedged answers
+    - 3 pts: Asks only one question
+    - 0 pts: Skips WHO tie-down entirely
+    **Required questions:**
+    - "Do you feel we're properly licensed/insured/trained?"
+    - "Other than the amount, any reason you wouldn't want us?"
+
+### WHEN PHASE (10 points total)
+
+14. **Price Presentation (0-5 points)**
+    - 5 pts: Clear total and monthly options, confident delivery, alternate-choice close
+    - 3 pts: Price presented but weak close
+    - 0 pts: No clear price presentation
+
+15. **Post-Close Silence (0-5 points)**
+    - 5 pts: Rep remains completely silent until homeowner speaks first
+    - 0 pts: Rep speaks before homeowner (ANY talking before HO response = 0)
+
+## OUTPUT FORMAT
 
 Return your analysis as a valid JSON object with this EXACT structure:
 
 {
-  "scorecard": {
-    "total": <number 0-100>,
-    "process": {
-      "score": <number 0-100>,
-      "weight": 60,
-      "items": [
-        {"name": "Sitdown/Opening", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."},
-        {"name": "Rapport Building", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."},
-        {"name": "Assessment Questions", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."},
-        {"name": "Inspection/Discovery", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."},
-        {"name": "Present Findings", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."},
-        {"name": "Handle Objections", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."},
-        {"name": "Price Presentation", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."},
-        {"name": "Close/Next Steps", "score": <0-100>, "timestamp": "HH:MM:SS", "notes": "..."}
+  "client_name": "Client name from transcript or 'Unknown'",
+  "rep_name": "Rep name from transcript or 'Unknown'",
+  "company_name": "Company name from transcript or 'Unknown'",
+  
+  "overall_performance": {
+    "total_score": <0-100>,
+    "rating": "MVP|Playmaker|Starter|Prospect|Below Prospect",
+    "summary": "1-3 sentence overview of call performance"
+  },
+  
+  "phases": {
+    "why": {
+      "score": <0-38>,
+      "max_score": 38,
+      "checkpoints": [
+        {"name": "Sitdown/Transition", "score": <0-5>, "max_score": 5, "justification": "Evidence with specific quotes or behaviors observed"},
+        {"name": "Rapport Building – FORM Method", "score": <0-5>, "max_score": 5, "justification": "..."},
+        {"name": "Assessment Questions (Q1–Q16)", "score": <0-12>, "max_score": 12, "justification": "List questions asked/missed, note if Q8 was missed"},
+        {"name": "Inspection", "score": <0-3>, "max_score": 3, "justification": "..."},
+        {"name": "Present Findings", "score": <0-5>, "max_score": 5, "justification": "..."},
+        {"name": "Tie-Down WHY & Repair vs. Replace", "score": <0-8>, "max_score": 8, "justification": "..."}
       ]
     },
-    "skills": {
-      "score": <number 0-100>,
-      "weight": 30,
-      "items": [
-        {"name": "Building Rapport", "score": <0-100>, "notes": "..."},
-        {"name": "Finding Compelling Need", "score": <0-100>, "notes": "..."},
-        {"name": "Objection Handling", "score": <0-100>, "notes": "..."},
-        {"name": "Closing", "score": <0-100>, "notes": "..."}
+    "what": {
+      "score": <0-27>,
+      "max_score": 27,
+      "checkpoints": [
+        {"name": "Formal Presentation System", "score": <0-5>, "max_score": 5, "justification": "..."},
+        {"name": "System Options – FBAL Method", "score": <0-12>, "max_score": 12, "justification": "..."},
+        {"name": "Backup Recommendations/Visuals", "score": <0-5>, "max_score": 5, "justification": "..."},
+        {"name": "Tie-Down WHAT", "score": <0-5>, "max_score": 5, "justification": "..."}
       ]
     },
-    "communication": {
-      "score": <number 0-100>,
-      "weight": 10,
-      "items": [
-        {"name": "Pacing", "score": <0-100>, "notes": "..."},
-        {"name": "Speaker Share", "score": <0-100>, "notes": "..."}
+    "who": {
+      "score": <0-25>,
+      "max_score": 25,
+      "checkpoints": [
+        {"name": "Company Advantages", "score": <0-8>, "max_score": 8, "justification": "..."},
+        {"name": "Pyramid of Pain", "score": <0-8>, "max_score": 8, "justification": "..."},
+        {"name": "WHO Tie-Down", "score": <0-9>, "max_score": 9, "justification": "..."}
+      ]
+    },
+    "when": {
+      "score": <0-10>,
+      "max_score": 10,
+      "checkpoints": [
+        {"name": "Price Presentation", "score": <0-5>, "max_score": 5, "justification": "..."},
+        {"name": "Post-Close Silence", "score": <0-5>, "max_score": 5, "justification": "..."}
       ]
     }
   },
   
-  "customer_analysis": {
-    "needs_motivation": [
-      {"text": "Customer need or motivation", "timestamps": ["HH:MM:SS", "HH:MM:SS"]}
-    ],
-    "pain_points": [
-      {"text": "Specific problem or desire expressed", "timestamps": ["HH:MM:SS"]}
-    ],
-    "objections": [
-      {"text": "Objection or hesitation", "type": "price|timing|trust|other", "timestamps": ["HH:MM:SS"]}
-    ],
-    "outcomes_next_steps": [
-      {"text": "Agreement or follow-up action", "timestamps": ["HH:MM:SS"]}
-    ]
+  "what_done_right": [
+    "Specific positive behavior 1 with evidence",
+    "Specific positive behavior 2 with evidence"
+  ],
+  
+  "areas_for_improvement": [
+    "Specific improvement point 1 with actionable steps",
+    "Specific improvement point 2 with actionable steps"
+  ],
+  
+  "weakest_elements": [
+    "Critical deficiency 1 with specific impact",
+    "Critical deficiency 2 with specific impact"
+  ],
+  
+  "coaching_recommendations": {
+    "rapport_building": "Specific, actionable recommendation",
+    "structured_communication": "Specific, actionable recommendation",
+    "tie_downs": "Specific, actionable recommendation",
+    "post_price_silence": "Specific, actionable recommendation"
   },
   
-  "speaker_analytics": {
-    "conversation_time": "Xh Ym Zs",
-    "rep_speaking_time": "Xh Ym Zs",
-    "customer_speaking_time": "Xh Ym Zs",
-    "speaker_share_rep": <percentage>,
-    "pacing_wpm": <words per minute>,
-    "questions_asked": <number>,
-    "questions_received": <number>,
-    "longest_monologue": "Xm Ys",
-    "exchanges": <number of back-and-forth>
+  "rank_assessment": {
+    "current_rank": "MVP|Playmaker|Starter|Prospect|Below Prospect",
+    "next_level_requirements": "What specifically needs improvement to reach next rank"
   },
   
-  "re_engage": {
-    "recap": "Brief summary of the call and outcome",
-    "first_price_quote": "$XX,XXX",
-    "final_price_quote": "$XX,XXX with details",
-    "financing": "Financing terms if discussed",
-    "commitment": "Customer's commitment level and concerns",
-    "main_objection": "Primary reason for hesitation",
-    "emotional_tie": "Customer's emotional drivers",
-    "recommended_action": "What the rep should do next",
-    "suggested_message": "Draft follow-up message to send"
-  },
+  "quick_wins": [
+    {"title": "Highest-impact improvement", "action": "Specific 1-sentence action", "points_worth": <number>},
+    {"title": "Second improvement", "action": "Specific 1-sentence action", "points_worth": <number>}
+  ],
   
-  "transcript": "HH:MM:SS - Speaker Name\\n      What they said...\\nHH:MM:SS - Other Speaker\\n      Their response...",
-  
-  "summary": {
-    "title": "Call title based on content",
-    "customer_name": "Name if mentioned",
-    "rep_name": "Name if mentioned",
-    "call_outcome": "won|lost|pending|follow_up",
-    "key_topics": ["topic1", "topic2"]
-  }
+  "transcript": "Full transcript in plain text format:\\nHH:MM:SS - Speaker Name\\n      What they said...\\n\\nHH:MM:SS - Other Speaker\\n      Their response..."
 }
 
-CRITICAL REQUIREMENTS:
-1. Analyze the ENTIRE audio from start (00:00:00) to the very end
-2. The transcript MUST include ALL exchanges throughout the FULL recording duration
-3. Include timestamps that span the ENTIRE call - from beginning to middle to end
-4. For a 3+ hour call, the transcript should have HUNDREDS of entries
-5. Do NOT summarize or skip parts - capture EVERY significant exchange
-6. Be specific with timestamps for each exchange
+## CRITICAL REQUIREMENTS
 
-Return ONLY valid JSON, no markdown or extra text.`
+1. Analyze the ENTIRE audio from start to end
+2. Be OBJECTIVE - base every score on specific evidence from the call
+3. Never inflate scores - stay consistent with the rubric
+4. Every justification must cite specific quotes or behaviors observed
+5. The transcript MUST cover the FULL call duration - DO NOT summarize or skip parts
+6. Return ONLY valid JSON, no markdown or extra text`
 
 // ============================================================================
 // Helper functions
@@ -205,7 +320,7 @@ export async function POST(request: Request) {
     const durationSeconds = recording.duration || 0
     const analysisFilePath = recording.analysis_file_path || filePath
 
-    console.log(`📊 Starting analysis: ${recording.file_name} (${formatTime(durationSeconds)})`)
+    console.log(`📊 Starting W4 analysis: ${recording.file_name} (${formatTime(durationSeconds)})`)
 
     // Create or update analysis record
     const { data: existingAnalysis } = await supabase
@@ -222,7 +337,7 @@ export async function POST(request: Request) {
       }
       const { error: updateError } = await supabase.from('audio_analyses').update({
         processing_status: 'processing',
-        current_chunk_message: 'Starting analysis...',
+        current_chunk_message: 'Starting W4 analysis...',
         error_message: null,
       }).eq('id', existingAnalysis.id)
       
@@ -240,16 +355,10 @@ export async function POST(request: Request) {
         .insert({
           recording_id: recordingId,
           processing_status: 'processing',
-          current_chunk_message: 'Starting analysis...',
-          // Required fields with defaults
-          transcript: '[]',
+          current_chunk_message: 'Starting W4 analysis...',
+          transcript: '',
           title: 'Analyzing...',
           summary: '',
-          timeline: [],
-          main_topics: [],
-          glossary: [],
-          insights: [],
-          conclusion: '',
           language: 'en',
           confidence_score: 0,
           input_tokens: 0,
@@ -285,7 +394,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       analysisId,
-      message: 'Analysis started',
+      message: 'W4 Analysis started',
     })
 
   } catch (error) {
@@ -331,21 +440,50 @@ async function processAnalysis(params: {
     }
 
     // Step 2: Download file as blob and upload to Gemini Files API
-    console.log('📤 Uploading to Gemini Files API...')
-    await updateProgress(supabase, analysisId, 'Uploading to AI service...')
+    console.log('📤 Downloading audio from Supabase...')
+    console.log('📎 Signed URL:', signedUrlData.signedUrl.substring(0, 100) + '...')
+    await updateProgress(supabase, analysisId, 'Downloading audio file...')
 
     const mimeType = getMimeType(filePath)
     
-    // Fetch the file from Supabase
-    const audioResponse = await fetch(signedUrlData.signedUrl)
-    if (!audioResponse.ok) {
+    // Fetch the file from Supabase with retry logic
+    let audioResponse: Response | null = null
+    let retryCount = 0
+    const maxRetries = 3
+    
+    while (retryCount < maxRetries) {
+      try {
+        console.log(`🔄 Fetch attempt ${retryCount + 1}/${maxRetries}...`)
+        audioResponse = await fetch(signedUrlData.signedUrl, {
+          signal: AbortSignal.timeout(300000), // 5 minute timeout
+        })
+        if (audioResponse.ok) break
+        throw new Error(`HTTP ${audioResponse.status}: ${audioResponse.statusText}`)
+      } catch (fetchError) {
+        retryCount++
+        console.error(`❌ Fetch attempt ${retryCount} failed:`, fetchError)
+        if (retryCount >= maxRetries) {
+          throw new Error(`Failed to fetch audio file after ${maxRetries} attempts: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`)
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000 * retryCount)) // Exponential backoff
+      }
+    }
+    
+    if (!audioResponse || !audioResponse.ok) {
       throw new Error('Failed to fetch audio file')
     }
     
+    console.log('📥 Audio downloaded, converting to buffer...')
+    await updateProgress(supabase, analysisId, 'Processing audio file...')
+    
     const audioBlob = await audioResponse.blob()
     const audioBuffer = await audioBlob.arrayBuffer()
+    console.log(`📊 Audio size: ${(audioBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`)
     
     // Upload to Gemini Files API
+    console.log('📤 Uploading to Gemini Files API...')
+    await updateProgress(supabase, analysisId, 'Uploading to AI service...')
+    
     const uploadResult = await ai.files.upload({
       file: new Blob([audioBuffer], { type: mimeType }),
       config: { mimeType },
@@ -371,13 +509,13 @@ async function processAnalysis(params: {
       throw new Error('File processing failed')
     }
 
-    // Step 4: Generate analysis
-    console.log('🤖 Generating analysis...')
-    await updateProgress(supabase, analysisId, 'AI is analyzing the call...')
+    // Step 4: Generate W4 analysis
+    console.log('🤖 Generating W4 analysis...')
+    await updateProgress(supabase, analysisId, 'AI is analyzing the call using W4 methodology...')
 
     // Add duration info to prompt
     const durationStr = formatTime(durationSeconds)
-    const dynamicPrompt = SALES_ANALYSIS_PROMPT + `
+    const dynamicPrompt = W4_ANALYSIS_PROMPT + `
 
 AUDIO DURATION: This recording is ${durationStr} long (${Math.round(durationSeconds / 60)} minutes).
 Your transcript MUST cover the ENTIRE duration from 00:00:00 to approximately ${durationStr}.
@@ -425,24 +563,48 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
     const pricing = GEMINI_PRICING[MODEL_NAME] || GEMINI_PRICING['gemini-3-pro-preview']
     const estimatedCost = (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output
 
+    // Build W4 report object (without transcript)
+    const w4Report = {
+      client_name: analysisResult.client_name || 'Unknown',
+      rep_name: analysisResult.rep_name || 'Unknown',
+      company_name: analysisResult.company_name || 'Unknown',
+      overall_performance: analysisResult.overall_performance || {
+        total_score: 0,
+        rating: 'Below Prospect',
+        summary: 'Analysis incomplete',
+      },
+      phases: analysisResult.phases || {
+        why: { score: 0, max_score: 38, checkpoints: [] },
+        what: { score: 0, max_score: 27, checkpoints: [] },
+        who: { score: 0, max_score: 25, checkpoints: [] },
+        when: { score: 0, max_score: 10, checkpoints: [] },
+      },
+      what_done_right: analysisResult.what_done_right || [],
+      areas_for_improvement: analysisResult.areas_for_improvement || [],
+      weakest_elements: analysisResult.weakest_elements || [],
+      coaching_recommendations: analysisResult.coaching_recommendations || {},
+      rank_assessment: analysisResult.rank_assessment || {
+        current_rank: 'Below Prospect',
+        next_level_requirements: 'Complete fundamental training',
+      },
+      quick_wins: analysisResult.quick_wins || [],
+    }
+
+    // Generate title from report
+    const title = `${w4Report.rep_name} - ${w4Report.client_name} (${w4Report.overall_performance.rating}: ${w4Report.overall_performance.total_score}/100)`
+
     await supabase.from('audio_analyses').update({
       // Main data
-      title: analysisResult.summary?.title || 'Sales Call Analysis',
-      summary: analysisResult.re_engage?.recap || analysisResult.summary?.title || '',
+      title: title,
+      summary: w4Report.overall_performance.summary || '',
       transcript: analysisResult.transcript || '',
       
-      // New sales coaching fields
-      scorecard: analysisResult.scorecard || null,
-      customer_analysis: analysisResult.customer_analysis || null,
-      speaker_analytics: analysisResult.speaker_analytics || null,
-      re_engage: analysisResult.re_engage || null,
-      
-      // Simple fields
-      main_topics: analysisResult.summary?.key_topics || [],
+      // W4 Report (new structure)
+      w4_report: w4Report,
       
       // Metadata
       processing_status: 'done',
-      current_chunk_message: 'Analysis complete!',
+      current_chunk_message: 'W4 Analysis complete!',
       confidence_score: 0.9,
       duration_analyzed: durationSeconds,
       input_tokens: inputTokens,
@@ -462,7 +624,8 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
       // Ignore cleanup errors
     }
 
-    console.log(`🎉 Analysis complete! Tokens: ${totalTokens}, Cost: $${estimatedCost.toFixed(4)}`)
+    console.log(`🎉 W4 Analysis complete! Score: ${w4Report.overall_performance.total_score}/100 (${w4Report.overall_performance.rating})`)
+    console.log(`📊 Tokens: ${totalTokens}, Cost: $${estimatedCost.toFixed(4)}`)
 
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error)
