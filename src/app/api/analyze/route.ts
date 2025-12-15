@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { W4_ANALYSIS_PROMPT } from './w4-prompt'
 
 // Dynamic import to avoid build issues
 let GoogleGenAI: typeof import('@google/genai').GoogleGenAI
@@ -19,7 +20,7 @@ async function loadGenAI() {
 export const maxDuration = 900
 
 // Configuration
-const MODEL_NAME = 'gemini-2.5-flash' // Cheaper & more reliable (same as transcription)
+const MODEL_NAME = 'gemini-3-pro-preview' // Better quality for W4 analysis
 
 // Gemini pricing (per 1M tokens)
 const GEMINI_PRICING: Record<string, { input: number; output: number }> = {
@@ -28,227 +29,7 @@ const GEMINI_PRICING: Record<string, { input: number; output: number }> = {
   'gemini-2.0-flash-exp': { input: 0.075, output: 0.30 },
 }
 
-// ============================================================================
-// W4 SALES SYSTEM PROMPT (RoofCoach Methodology)
-// ============================================================================
-const W4_ANALYSIS_PROMPT = `You are RoofCoach, an expert roofing sales coaching AI trained in the W4 Sales System methodology. 
-Your purpose is to analyze this sales call recording with extreme precision, evaluate performance objectively against the comprehensive RepFuel AI Rubric, and produce a detailed coaching analysis.
-
-## W4 SYSTEM SCORING FRAMEWORK
-
-**Total Score: 0-100 points**
-- **WHY Phase: 38 points** (6 checkpoints)
-- **WHAT Phase: 27 points** (4 checkpoints)
-- **WHO Phase: 25 points** (3 checkpoints)
-- **WHEN Phase: 10 points** (2 checkpoints)
-
-### Performance Ratings
-- **MVP:** 90-100 points
-- **Playmaker:** 75-89 points
-- **Starter:** 60-74 points
-- **Prospect:** 45-59 points
-- **Below Prospect:** 0-44 points
-
-## DETAILED CHECKPOINT SCORING CRITERIA
-
-### WHY PHASE (38 points total)
-
-1. **Sitdown/Transition (0-5 points)**
-   - 5 pts: Clear request with benefit statement, successful indoor transition
-   - 3 pts: Request made but missing benefit statement
-   - 1 pt: Minimal attempt to create indoor meeting
-   - 0 pts: Conducts presentation in driveway or skips sitdown
-
-2. **Rapport Building – FORM Method (0-5 points)**
-   - 5 pts: Uses 3+ FORM elements (Family/Occupation/Recreation/Material)
-   - 4 pts: Uses 2-3 FORM elements
-   - 2 pts: Uses 1-2 elements or basic rapport
-   - 0 pts: No rapport building
-
-3. **Assessment Questions Q1-Q16 (0-12 points)**
-   - 12 pts: Asks all 16 questions systematically
-   - 10 pts: Asks 13-15 questions
-   - 8 pts: Asks 10-12 questions
-   - 6 pts: Asks 7-9 questions
-   - 4 pts: Asks 4-6 questions
-   - 0 pts: No systematic assessment
-   **CRITICAL:** Q8 (insurance claim) must be asked
-
-4. **Inspection (0-3 points)**
-   - 3 pts: Complete roof/attic inspection with photos, findings referenced later
-   - 2 pts: Good inspection, some documentation
-   - 1 pt: Basic inspection mentioned
-   - 0 pts: No clear inspection process
-
-5. **Present Findings (0-5 points)**
-   - 5 pts: Complete R/Y/G system, 3-step explanations (What/Why/Implication), visual proof, no solutions yet
-   - 3 pts: Basic findings presentation
-   - 0 pts: Jumps to solutions or no findings presentation
-
-6. **Tie-Down WHY & Repair vs. Replace (0-8 points)**
-   - 8 pts: Both questions asked confidently, waits for verbal confirmation, homeowner agrees
-   - 6 pts: Questions asked but doesn't handle misalignment
-   - 3 pts: Implies need without direct question
-   - 0 pts: Assumes agreement without asking
-
-### WHAT PHASE (27 points total)
-
-7. **Formal Presentation System (0-5 points)**
-   - 5 pts: Clear introduction of guide, explains purpose, uses throughout
-   - 3 pts: Uses guide but less clear introduction
-   - 0 pts: Freestyles without structure
-
-8. **System Options – FBAL Method (0-12 points)**
-   - 12 pts: Complete FBAL (Feature/Benefit/Advantage/Limitation) for all major components
-   - 10 pts: FBAL for most components
-   - 8 pts: Some FBAL structure
-   - 4 pts: Minimal options presentation
-   - 0 pts: No systematic options presentation
-
-9. **Backup Recommendations/Visuals (0-5 points)**
-   - 5 pts: Multiple types of visual proof (samples, literature, photos, codes)
-   - 3 pts: Some visual proof
-   - 0 pts: No physical/visual proof
-
-10. **Tie-Down WHAT (0-5 points)**
-    - 5 pts: Clear tie-down, silence maintained, homeowner verbally agrees
-    - 3 pts: Tie-down asked but execution weak
-    - 0 pts: Skips tie-down, moves to price without confirmation
-
-### WHO PHASE (25 points total)
-
-11. **Company Advantages (0-8 points)**
-    - 8 pts: Strong differentiators in People/Process/Company categories
-    - 6 pts: Good advantages in most categories
-    - 4 pts: Some advantages mentioned
-    - 0 pts: Generic claims or no differentiation
-
-12. **Pyramid of Pain (0-8 points)**
-    - 8 pts: Multiple complete 5-step pyramids (Introduce/Stimulate/Desire to Eliminate/Solution/Close)
-    - 6 pts: Some pyramid structure used
-    - 4 pts: Basic pain/solution contrast
-    - 0 pts: Only presents positives, no emotional contrast
-
-13. **WHO Tie-Down (0-9 points)**
-    - 9 pts: Asks both questions clearly, maintains silence, gets clear "yes" or resolves hedge
-    - 6 pts: Asks both questions but accepts hedged answers
-    - 3 pts: Asks only one question
-    - 0 pts: Skips WHO tie-down entirely
-    **Required questions:**
-    - "Do you feel we're properly licensed/insured/trained?"
-    - "Other than the amount, any reason you wouldn't want us?"
-
-### WHEN PHASE (10 points total)
-
-14. **Price Presentation (0-5 points)**
-    - 5 pts: Clear total and monthly options, confident delivery, alternate-choice close
-    - 3 pts: Price presented but weak close
-    - 0 pts: No clear price presentation
-
-15. **Post-Close Silence (0-5 points)**
-    - 5 pts: Rep remains completely silent until homeowner speaks first
-    - 0 pts: Rep speaks before homeowner (ANY talking before HO response = 0)
-
-## OUTPUT FORMAT
-
-Return your analysis as a valid JSON object with this EXACT structure:
-
-{
-  "client_name": "Client name from transcript or 'Unknown'",
-  "rep_name": "Rep name from transcript or 'Unknown'",
-  "company_name": "Company name from transcript or 'Unknown'",
-  
-  "overall_performance": {
-    "total_score": <0-100>,
-    "rating": "MVP|Playmaker|Starter|Prospect|Below Prospect",
-    "summary": "1-3 sentence overview of call performance"
-  },
-  
-  "phases": {
-    "why": {
-      "score": <0-38>,
-      "max_score": 38,
-      "checkpoints": [
-        {"name": "Sitdown/Transition", "score": <0-5>, "max_score": 5, "justification": "Evidence with specific quotes or behaviors observed"},
-        {"name": "Rapport Building – FORM Method", "score": <0-5>, "max_score": 5, "justification": "..."},
-        {"name": "Assessment Questions (Q1–Q16)", "score": <0-12>, "max_score": 12, "justification": "List questions asked/missed, note if Q8 was missed"},
-        {"name": "Inspection", "score": <0-3>, "max_score": 3, "justification": "..."},
-        {"name": "Present Findings", "score": <0-5>, "max_score": 5, "justification": "..."},
-        {"name": "Tie-Down WHY & Repair vs. Replace", "score": <0-8>, "max_score": 8, "justification": "..."}
-      ]
-    },
-    "what": {
-      "score": <0-27>,
-      "max_score": 27,
-      "checkpoints": [
-        {"name": "Formal Presentation System", "score": <0-5>, "max_score": 5, "justification": "..."},
-        {"name": "System Options – FBAL Method", "score": <0-12>, "max_score": 12, "justification": "..."},
-        {"name": "Backup Recommendations/Visuals", "score": <0-5>, "max_score": 5, "justification": "..."},
-        {"name": "Tie-Down WHAT", "score": <0-5>, "max_score": 5, "justification": "..."}
-      ]
-    },
-    "who": {
-      "score": <0-25>,
-      "max_score": 25,
-      "checkpoints": [
-        {"name": "Company Advantages", "score": <0-8>, "max_score": 8, "justification": "..."},
-        {"name": "Pyramid of Pain", "score": <0-8>, "max_score": 8, "justification": "..."},
-        {"name": "WHO Tie-Down", "score": <0-9>, "max_score": 9, "justification": "..."}
-      ]
-    },
-    "when": {
-      "score": <0-10>,
-      "max_score": 10,
-      "checkpoints": [
-        {"name": "Price Presentation", "score": <0-5>, "max_score": 5, "justification": "..."},
-        {"name": "Post-Close Silence", "score": <0-5>, "max_score": 5, "justification": "..."}
-      ]
-    }
-  },
-  
-  "what_done_right": [
-    "Specific positive behavior 1 with evidence",
-    "Specific positive behavior 2 with evidence"
-  ],
-  
-  "areas_for_improvement": [
-    "Specific improvement point 1 with actionable steps",
-    "Specific improvement point 2 with actionable steps"
-  ],
-  
-  "weakest_elements": [
-    "Critical deficiency 1 with specific impact",
-    "Critical deficiency 2 with specific impact"
-  ],
-  
-  "coaching_recommendations": {
-    "rapport_building": "Specific, actionable recommendation",
-    "structured_communication": "Specific, actionable recommendation",
-    "tie_downs": "Specific, actionable recommendation",
-    "post_price_silence": "Specific, actionable recommendation"
-  },
-  
-  "rank_assessment": {
-    "current_rank": "MVP|Playmaker|Starter|Prospect|Below Prospect",
-    "next_level_requirements": "What specifically needs improvement to reach next rank"
-  },
-  
-  "quick_wins": [
-    {"title": "Highest-impact improvement", "action": "Specific 1-sentence action", "points_worth": <number>},
-    {"title": "Second improvement", "action": "Specific 1-sentence action", "points_worth": <number>}
-  ],
-  
-  "transcript": "Full transcript in plain text format:\\nHH:MM:SS - Speaker Name\\n      What they said...\\n\\nHH:MM:SS - Other Speaker\\n      Their response..."
-}
-
-## CRITICAL REQUIREMENTS
-
-1. Analyze the ENTIRE audio from start to end
-2. Be OBJECTIVE - base every score on specific evidence from the call
-3. Never inflate scores - stay consistent with the rubric
-4. Every justification must cite specific quotes or behaviors observed
-5. The transcript MUST cover the FULL call duration - DO NOT summarize or skip parts
-6. Return ONLY valid JSON, no markdown or extra text`
+// W4 prompt imported from ./w4-prompt.ts
 
 // ============================================================================
 // Helper functions
@@ -442,10 +223,20 @@ async function processAnalysis(params: {
     }
 
     const mimeType = getMimeType(filePath)
-    const audioResponse = await fetch(signedUrlData.signedUrl)
     
-    if (!audioResponse.ok) {
-      throw new Error(`Failed to fetch audio: ${audioResponse.status}`)
+    // Fetch with simple retry for 5xx errors
+    let audioResponse: Response | null = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      audioResponse = await fetch(signedUrlData.signedUrl)
+      if (audioResponse.ok) break
+      if (audioResponse.status >= 500 && attempt < 3) {
+        console.log(`⚠️ Fetch failed (${audioResponse.status}), retrying in ${attempt * 2}s...`)
+        await new Promise(r => setTimeout(r, attempt * 2000))
+      }
+    }
+    
+    if (!audioResponse?.ok) {
+      throw new Error(`Failed to fetch audio: ${audioResponse?.status}`)
     }
     
     const audioBuffer = await (await audioResponse.blob()).arrayBuffer()
@@ -479,14 +270,39 @@ async function processAnalysis(params: {
     console.log('🤖 Generating W4 analysis...')
     await updateProgress(supabase, analysisId, 'AI is analyzing the call using W4 methodology...')
 
-    // Add duration info to prompt
-    const durationStr = formatTime(durationSeconds)
-    const dynamicPrompt = W4_ANALYSIS_PROMPT + `
+    // Try to get prompt from database, fall back to file
+    let basePrompt = W4_ANALYSIS_PROMPT
+    const { data: dbPrompt } = await supabase
+      .from('admin_prompts')
+      .select('prompt')
+      .eq('name', 'w4_analysis')
+      .eq('is_active', true)
+      .single()
+    
+    if (dbPrompt?.prompt) {
+      console.log('📝 Using custom prompt from database')
+      basePrompt = dbPrompt.prompt
+    } else {
+      console.log('📝 Using default prompt from file')
+    }
 
-AUDIO DURATION: This recording is ${durationStr} long (${Math.round(durationSeconds / 60)} minutes).
-Your transcript MUST cover the ENTIRE duration from 00:00:00 to approximately ${durationStr}.
-For a recording this long, expect to produce a VERY detailed transcript with many entries.
-DO NOT stop early or summarize - transcribe EVERYTHING.`
+    // Add duration info and STRICT scoring rules to prompt
+    const durationStr = formatTime(durationSeconds)
+    const dynamicPrompt = basePrompt + `
+
+AUDIO DURATION: ${durationStr} (${Math.round(durationSeconds / 60)} minutes).
+
+## STRICT SCORING RULES - MANDATORY
+1. **Default to 0 points** - Only give points if you hear CLEAR, EXPLICIT evidence
+2. **No assumptions** - If you don't hear it clearly, it didn't happen = 0 points
+3. **Partial credit is rare** - "Sort of did it" or "implied" = 0 or 1 point MAX
+4. **Be skeptical** - Ask yourself: "Would a tough sales manager accept this as evidence?"
+5. **Quote requirement** - Every score above 0 MUST have a direct quote from the audio
+6. **When in doubt, score LOWER** - It's better to be too strict than too lenient
+7. **Average call = 40-55 points** - A 60+ score means EXCELLENT execution with clear evidence
+
+DO NOT include a full transcript - only key quotes as evidence for scores.
+Focus on finding GAPS and WEAKNESSES, not praising what was done.`
 
     // Use streaming to prevent timeout for long audio
     const stream = await ai.models.generateContentStream({
@@ -496,8 +312,8 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
         dynamicPrompt,
       ]),
       config: {
-        temperature: 0.3,
-        maxOutputTokens: 100000,
+        temperature: 0.1, // Very low = strict, factual, follows rubric exactly
+        maxOutputTokens: 32000, // W4 report should be ~20-30k chars
         responseMimeType: 'application/json',
       },
     })
@@ -508,6 +324,8 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
     let outputTokens = 0
     let chunkCount = 0
 
+    let finishReason = ''
+    
     for await (const chunk of stream) {
       responseText += chunk.text || ''
       chunkCount++
@@ -518,27 +336,90 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
         console.log(`📝 W4 chunk ${chunkCount}: ${responseText.length} chars`)
       }
       
-      // Get token counts from last chunk
+      // Get token counts and finish reason from chunk
       if (chunk.usageMetadata) {
         inputTokens = chunk.usageMetadata.promptTokenCount || inputTokens
         outputTokens = chunk.usageMetadata.candidatesTokenCount || outputTokens
       }
+      
+      // Check for finish reason (why the model stopped)
+      if (chunk.candidates?.[0]?.finishReason) {
+        finishReason = chunk.candidates[0].finishReason
+        console.log(`🏁 Finish reason: ${finishReason}`)
+      }
+    }
+    
+    // Log finish reason if present
+    if (finishReason && finishReason !== 'STOP') {
+      console.warn(`⚠️ Model stopped with reason: ${finishReason}`)
     }
 
     const totalTokens = inputTokens + outputTokens
     console.log(`📊 Tokens: ${inputTokens} in, ${outputTokens} out, ${totalTokens} total`)
+    
+    // Check for empty response
+    if (!responseText || responseText.trim().length === 0) {
+      console.error('❌ Empty response from AI model!')
+      console.error('Input tokens:', inputTokens, '- this might be too many')
+      console.error('Chunks received:', chunkCount)
+      throw new Error(`AI returned empty response. Input tokens: ${inputTokens}. Try with shorter audio or simpler prompt.`)
+    }
+    
+    console.log('📝 Response preview:', responseText.substring(0, 200))
+    
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let analysisResult: any
 
     try {
       analysisResult = JSON.parse(responseText)
-    } catch {
-      // Try to extract JSON from response
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+    } catch (parseError) {
+      console.warn('⚠️ JSON parse failed, attempting repair...', parseError)
+      console.warn('Response length:', responseText.length)
+      console.warn('First 500 chars:', responseText.substring(0, 500))
+      
+      // Try to extract and repair JSON
+      let jsonText = responseText
+      
+      // Remove any markdown code blocks
+      jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+      
+      // Try to find JSON object
+      const jsonMatch = jsonText.match(/\{[\s\S]*/)
       if (jsonMatch) {
-        analysisResult = JSON.parse(jsonMatch[0])
+        jsonText = jsonMatch[0]
+        
+        // Try to repair truncated JSON by closing brackets
+        let openBraces = 0
+        let openBrackets = 0
+        let inString = false
+        let escaped = false
+        
+        for (const char of jsonText) {
+          if (escaped) { escaped = false; continue }
+          if (char === '\\') { escaped = true; continue }
+          if (char === '"' && !escaped) { inString = !inString; continue }
+          if (inString) continue
+          if (char === '{') openBraces++
+          if (char === '}') openBraces--
+          if (char === '[') openBrackets++
+          if (char === ']') openBrackets--
+        }
+        
+        // Close unclosed brackets/braces
+        jsonText += ']'.repeat(Math.max(0, openBrackets))
+        jsonText += '}'.repeat(Math.max(0, openBraces))
+        
+        try {
+          analysisResult = JSON.parse(jsonText)
+          console.log('✅ JSON repaired successfully')
+        } catch {
+          console.error('❌ JSON repair failed. Response length:', responseText.length)
+          console.error('First 500 chars:', responseText.substring(0, 500))
+          console.error('Last 500 chars:', responseText.substring(responseText.length - 500))
+          throw new Error('Failed to parse AI response as JSON - response may be truncated')
+        }
       } else {
-        throw new Error('Failed to parse AI response as JSON')
+        throw new Error('No JSON object found in AI response')
       }
     }
 

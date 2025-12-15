@@ -39,11 +39,11 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   
-  // isAnalyzing is ONLY true when W4 analysis is actively running
-  // Transcript generation is separate and shown on the right panel
+  // Processing state from DB
   const processingStage = analysis?.processing_stage as 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error' | undefined
   const w4Report: W4Report | null = analysis?.w4_report || null
-  const isAnalyzing = processingStage === 'analyzing' && !w4Report // ONLY W4 analysis, not transcript
+  // isAnalyzing = true when analyzing stage is active (even for re-analysis)
+  const isAnalyzing = processingStage === 'analyzing'
   
   // Lazy-loaded transcript (loaded separately to avoid memory issues)
   const [transcript, setTranscript] = useState<string | null>(null)
@@ -409,28 +409,28 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
         <header className="flex-shrink-0 bg-gray-900 border-b border-gray-800 px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              {/* Status Badge */}
+              {/* Status Badge - check processing states FIRST before showing "Analyzed" */}
               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                w4Report
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                processingStage === 'analyzing'
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse'
                   : processingStage === 'transcribing'
-                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                  : processingStage === 'analyzing'
-                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse'
                   : processingStage === 'error' || analysis?.processing_status === 'error'
                   ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                  : w4Report
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                   : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
               }`}>
-                {w4Report ? '✓ Analyzed' : 
+                {processingStage === 'analyzing' ? '🤖 Analyzing...' :
                  processingStage === 'transcribing' ? '🎙️ Transcribing...' :
-                 processingStage === 'analyzing' ? '🤖 Analyzing...' : 
                  processingStage === 'error' || analysis?.processing_status === 'error' ? '✗ Error' :
+                 w4Report ? '✓ Analyzed' : 
                  'Ready'}
               </span>
               
-              {/* Processing message */}
-              {isAnalyzing && analysis?.current_chunk_message && (
-                <span className="text-sm text-gray-400">{analysis.current_chunk_message}</span>
+              {/* Processing message - show for analyzing OR transcribing */}
+              {(processingStage === 'analyzing' || processingStage === 'transcribing') && analysis?.current_chunk_message && (
+                <span className="text-sm text-gray-400 max-w-xs truncate">{analysis.current_chunk_message}</span>
               )}
             </div>
 
@@ -488,6 +488,19 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-6 relative">
+          {/* Re-analyzing overlay - shows when analyzing with existing report */}
+          {isAnalyzing && w4Report && (
+            <div className="sticky top-0 z-10 mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg backdrop-blur-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-amber-400 font-medium">Re-analyzing...</span>
+                {analysis?.current_chunk_message && (
+                  <span className="text-amber-400/70 text-sm truncate">{analysis.current_chunk_message}</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {w4Report ? (
             <div className="space-y-6 max-w-5xl mx-auto">
               {/* Overall Performance */}

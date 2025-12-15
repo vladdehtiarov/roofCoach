@@ -68,7 +68,7 @@ interface RecordingWithUser {
   user_role: string
 }
 
-type Tab = 'users' | 'recordings' | 'usage'
+type Tab = 'users' | 'recordings' | 'usage' | 'prompts'
 type TimeRange = 'today' | 'week' | 'month' | 'year'
 
 export default function AdminDashboard({ user }: { user: User }) {
@@ -95,6 +95,14 @@ export default function AdminDashboard({ user }: { user: User }) {
   })
   const [isChangingRole, setIsChangingRole] = useState(false)
   
+  // Prompts state
+  const [prompt, setPrompt] = useState('')
+  const [originalPrompt, setOriginalPrompt] = useState('')
+  const [promptDescription, setPromptDescription] = useState('')
+  const [promptLoading, setPromptLoading] = useState(false)
+  const [promptSaving, setPromptSaving] = useState(false)
+  const [promptMessage, setPromptMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  
   const router = useRouter()
   const toast = useToast()
 
@@ -113,6 +121,8 @@ export default function AdminDashboard({ user }: { user: User }) {
       loadRecordings()
     } else if (activeTab === 'usage') {
       loadTokenStats(chartTimeRange)
+    } else if (activeTab === 'prompts') {
+      loadPrompt()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, filter, chartTimeRange])
@@ -135,6 +145,74 @@ export default function AdminDashboard({ user }: { user: User }) {
       setUsageLoading(false)
     }
   }
+
+  const loadPrompt = async () => {
+    if (prompt) return // Already loaded
+    setPromptLoading(true)
+    try {
+      const response = await fetch('/api/admin/prompt?name=w4_analysis')
+      const data = await response.json()
+      
+      if (data.prompt) {
+        setPrompt(data.prompt.prompt)
+        setOriginalPrompt(data.prompt.prompt)
+        setPromptDescription(data.prompt.description || '')
+      } else {
+        // Load default from file
+        const defaultResponse = await fetch('/api/admin/prompt/default')
+        if (defaultResponse.ok) {
+          const defaultData = await defaultResponse.json()
+          setPrompt(defaultData.prompt || '')
+          setOriginalPrompt(defaultData.prompt || '')
+        }
+      }
+    } catch (err) {
+      console.error('Error loading prompt:', err)
+      toast.error('Failed to load prompt')
+    } finally {
+      setPromptLoading(false)
+    }
+  }
+
+  const savePrompt = async () => {
+    setPromptSaving(true)
+    setPromptMessage(null)
+
+    try {
+      const response = await fetch('/api/admin/prompt', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'w4_analysis',
+          prompt,
+          description: promptDescription,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to save')
+      }
+
+      setOriginalPrompt(prompt)
+      setPromptMessage({ type: 'success', text: 'Prompt saved successfully!' })
+      toast.success('Prompt saved!')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save'
+      setPromptMessage({ type: 'error', text: message })
+      toast.error(message)
+    } finally {
+      setPromptSaving(false)
+    }
+  }
+
+  const resetPrompt = () => {
+    setPrompt(originalPrompt)
+    setPromptMessage(null)
+  }
+
+  const hasPromptChanges = prompt !== originalPrompt
 
   const loadUsers = async () => {
     if (!supabase) return
@@ -425,6 +503,19 @@ export default function AdminDashboard({ user }: { user: User }) {
             </svg>
             AI Usage
           </button>
+          <button
+            onClick={() => { setActiveTab('prompts'); setSearchQuery(''); }}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+              activeTab === 'prompts'
+                ? 'bg-emerald-500/20 text-emerald-400'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Prompts
+          </button>
         </div>
 
         {/* Search */}
@@ -473,7 +564,110 @@ export default function AdminDashboard({ user }: { user: User }) {
         )}
 
         {/* Content */}
-        {activeTab === 'usage' ? (
+        {activeTab === 'prompts' ? (
+          promptLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="animate-spin w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full" />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Prompt Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-white">W4 Analysis Prompt</h2>
+                  <p className="text-slate-400 text-sm">Edit the AI prompt used for W4 sales analysis</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {hasPromptChanges && (
+                    <button
+                      onClick={resetPrompt}
+                      className="px-4 py-2 border border-slate-700 text-slate-300 rounded-lg hover:bg-slate-800"
+                    >
+                      Reset
+                    </button>
+                  )}
+                  <button
+                    onClick={savePrompt}
+                    disabled={promptSaving || !hasPromptChanges}
+                    className={`px-5 py-2 rounded-lg font-medium flex items-center gap-2 ${
+                      hasPromptChanges
+                        ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white hover:from-emerald-600 hover:to-green-600'
+                        : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                    }`}
+                  >
+                    {promptSaving ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        Save
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Message */}
+              {promptMessage && (
+                <div className={`p-3 rounded-lg ${
+                  promptMessage.type === 'success' 
+                    ? 'bg-emerald-500/20 border border-emerald-500/30 text-emerald-400' 
+                    : 'bg-red-500/20 border border-red-500/30 text-red-400'
+                }`}>
+                  {promptMessage.text}
+                </div>
+              )}
+
+              {/* Description */}
+              <div>
+                <label className="block text-sm font-medium text-slate-400 mb-2">
+                  Description (optional)
+                </label>
+                <input
+                  type="text"
+                  value={promptDescription}
+                  onChange={(e) => setPromptDescription(e.target.value)}
+                  placeholder="Brief description of this prompt version"
+                  className="w-full px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+
+              {/* Prompt Editor */}
+              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/50 bg-slate-900/50">
+                  <span className="text-sm text-slate-400">Prompt Editor</span>
+                  <span className="text-xs text-slate-500">
+                    {prompt.length.toLocaleString()} characters
+                  </span>
+                </div>
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  className="w-full h-[calc(100vh-500px)] min-h-[400px] p-4 bg-slate-950 text-slate-200 font-mono text-sm resize-none focus:outline-none"
+                  spellCheck={false}
+                  placeholder="Enter the W4 analysis prompt here..."
+                />
+              </div>
+
+              {/* Help text */}
+              <div className="p-4 bg-slate-800/30 border border-slate-700/30 rounded-lg">
+                <h3 className="text-sm font-medium text-slate-300 mb-2">Tips:</h3>
+                <ul className="text-xs text-slate-500 space-y-1">
+                  <li>• The prompt must instruct the AI to return valid JSON</li>
+                  <li>• Include all 15 checkpoints with scoring criteria</li>
+                  <li>• Use specific detection criteria and red flags for consistency</li>
+                  <li>• Changes take effect immediately for new analyses</li>
+                  <li>• Test with a sample recording after making changes</li>
+                </ul>
+              </div>
+            </div>
+          )
+        ) : activeTab === 'usage' ? (
           usageLoading ? (
             <div className="space-y-4">
               <div className="grid sm:grid-cols-4 gap-4">
