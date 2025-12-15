@@ -19,11 +19,12 @@ async function loadGenAI() {
 export const maxDuration = 900
 
 // Configuration
-const MODEL_NAME = 'gemini-3-pro-preview'
+const MODEL_NAME = 'gemini-2.5-flash' // Cheaper & more reliable (same as transcription)
 
 // Gemini pricing (per 1M tokens)
 const GEMINI_PRICING: Record<string, { input: number; output: number }> = {
   'gemini-3-pro-preview': { input: 2.00, output: 12.00 },
+  'gemini-2.5-flash': { input: 0.075, output: 0.30 },
   'gemini-2.0-flash-exp': { input: 0.075, output: 0.30 },
 }
 
@@ -429,62 +430,26 @@ async function processAnalysis(params: {
     // Initialize new Gen AI SDK
     const ai = new GoogleGenAI({ apiKey: geminiApiKey })
 
-    // Step 1: Get signed URL from Supabase
-    console.log('🔗 Getting signed URL...')
-    await updateProgress(supabase, analysisId, 'Preparing audio file...')
+    // Get signed URL and upload to Gemini Files API
+    await updateProgress(supabase, analysisId, 'Preparing audio for analysis...')
 
     const { data: signedUrlData, error: signedUrlError } = await supabase.storage
       .from('audio-files')
-      .createSignedUrl(filePath, 3600) // 1 hour expiry
+      .createSignedUrl(filePath, 3600)
 
     if (signedUrlError || !signedUrlData) {
       throw new Error('Failed to get signed URL for audio file')
     }
 
-    // Step 2: Download file as blob and upload to Gemini Files API
-    console.log('📤 Downloading audio from Supabase...')
-    console.log('📎 Signed URL:', signedUrlData.signedUrl.substring(0, 100) + '...')
-    await updateProgress(supabase, analysisId, 'Downloading audio file...')
-
     const mimeType = getMimeType(filePath)
+    const audioResponse = await fetch(signedUrlData.signedUrl)
     
-    // Fetch the file from Supabase with retry logic
-    let audioResponse: Response | null = null
-    let retryCount = 0
-    const maxRetries = 3
-    
-    while (retryCount < maxRetries) {
-      try {
-        console.log(`🔄 Fetch attempt ${retryCount + 1}/${maxRetries}...`)
-        audioResponse = await fetch(signedUrlData.signedUrl, {
-          signal: AbortSignal.timeout(300000), // 5 minute timeout
-        })
-        if (audioResponse.ok) break
-        throw new Error(`HTTP ${audioResponse.status}: ${audioResponse.statusText}`)
-      } catch (fetchError) {
-        retryCount++
-        console.error(`❌ Fetch attempt ${retryCount} failed:`, fetchError)
-        if (retryCount >= maxRetries) {
-          throw new Error(`Failed to fetch audio file after ${maxRetries} attempts: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`)
-        }
-        await new Promise(resolve => setTimeout(resolve, 2000 * retryCount)) // Exponential backoff
-      }
+    if (!audioResponse.ok) {
+      throw new Error(`Failed to fetch audio: ${audioResponse.status}`)
     }
     
-    if (!audioResponse || !audioResponse.ok) {
-      throw new Error('Failed to fetch audio file')
-    }
-    
-    console.log('📥 Audio downloaded, converting to buffer...')
-    await updateProgress(supabase, analysisId, 'Processing audio file...')
-    
-    const audioBlob = await audioResponse.blob()
-    const audioBuffer = await audioBlob.arrayBuffer()
-    console.log(`📊 Audio size: ${(audioBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`)
-    
-    // Upload to Gemini Files API
-    console.log('📤 Uploading to Gemini Files API...')
-    await updateProgress(supabase, analysisId, 'Uploading to AI service...')
+    const audioBuffer = await (await audioResponse.blob()).arrayBuffer()
+    console.log(`📤 Uploading ${(audioBuffer.byteLength / 1024 / 1024).toFixed(1)}MB to Gemini...`)
     
     const uploadResult = await ai.files.upload({
       file: new Blob([audioBuffer], { type: mimeType }),
@@ -495,8 +460,7 @@ async function processAnalysis(params: {
       throw new Error('Failed to upload file to Gemini')
     }
 
-    console.log(`✅ File uploaded: ${uploadResult.name}`)
-    console.log(`📊 Audio duration: ${formatTime(durationSeconds)}`)
+    console.log(`✅ File ready: ${uploadResult.name} (${formatTime(durationSeconds)})`)
 
     // Step 3: Wait for file to be processed
     let file = uploadResult
@@ -524,7 +488,8 @@ Your transcript MUST cover the ENTIRE duration from 00:00:00 to approximately ${
 For a recording this long, expect to produce a VERY detailed transcript with many entries.
 DO NOT stop early or summarize - transcribe EVERYTHING.`
 
-    const response = await ai.models.generateContent({
+    // Use streaming to prevent timeout for long audio
+    const stream = await ai.models.generateContentStream({
       model: MODEL_NAME,
       contents: createUserContent([
         createPartFromUri(file.uri!, mimeType),
@@ -537,15 +502,31 @@ DO NOT stop early or summarize - transcribe EVERYTHING.`
       },
     })
 
-    // Extract token usage
-    const inputTokens = response.usageMetadata?.promptTokenCount || 0
-    const outputTokens = response.usageMetadata?.candidatesTokenCount || 0
-    const totalTokens = response.usageMetadata?.totalTokenCount || 0
+    // Collect streamed response
+    let responseText = ''
+    let inputTokens = 0
+    let outputTokens = 0
+    let chunkCount = 0
 
+    for await (const chunk of stream) {
+      responseText += chunk.text || ''
+      chunkCount++
+      
+      // Update progress every 5 chunks
+      if (chunkCount % 5 === 0) {
+        await updateProgress(supabase, analysisId, `Analyzing... (${Math.round(responseText.length / 1000)}k)`)
+        console.log(`📝 W4 chunk ${chunkCount}: ${responseText.length} chars`)
+      }
+      
+      // Get token counts from last chunk
+      if (chunk.usageMetadata) {
+        inputTokens = chunk.usageMetadata.promptTokenCount || inputTokens
+        outputTokens = chunk.usageMetadata.candidatesTokenCount || outputTokens
+      }
+    }
+
+    const totalTokens = inputTokens + outputTokens
     console.log(`📊 Tokens: ${inputTokens} in, ${outputTokens} out, ${totalTokens} total`)
-
-    // Parse response
-    const responseText = response.text || ''
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let analysisResult: any
 

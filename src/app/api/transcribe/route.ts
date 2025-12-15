@@ -28,57 +28,36 @@ const GEMINI_PRICING: Record<string, { input: number; output: number }> = {
   'gemini-2.0-flash-exp': { input: 0.075, output: 0.30 },
 }
 
-// Retry configuration (no timeout - Render allows long-running processes)
-const MAX_RETRIES = 3
-const RETRY_DELAY_MS = 5000 // 5 seconds base delay
-
-// Retry helper with exponential backoff (no artificial timeout)
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  context: string,
-  maxRetries = MAX_RETRIES
-): Promise<T> {
-  let lastError: Error | null = null
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`🔄 ${context} - Attempt ${attempt}/${maxRetries}...`)
-      return await fn()
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      console.warn(`⚠️ ${context} - Attempt ${attempt}/${maxRetries} failed:`, lastError.message)
-      
-      if (attempt < maxRetries) {
-        const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1) // Exponential backoff: 5s, 10s, 20s
-        console.log(`⏳ Retrying in ${delay / 1000}s...`)
-        await new Promise(resolve => setTimeout(resolve, delay))
-      }
-    }
-  }
-  
-  throw lastError || new Error(`${context} failed after ${maxRetries} attempts`)
-}
-
 // Transcription prompt - simple and focused
-const TRANSCRIPTION_PROMPT = `Transcribe the entire audio recording verbatim and accurately.
+const TRANSCRIPTION_PROMPT = `You are a professional transcriptionist. Create a detailed, timestamped transcript of this audio.
 
-OUTPUT FORMAT:
-Return only the transcript in this format:
+CRITICAL OUTPUT FORMAT - FOLLOW EXACTLY:
 
-MM:SS - Speaker Name
-      What they said...
+0:00 - Mike
+Hello, thanks for coming out today.
 
-MM:SS - Other Speaker
-      Their response...
+0:05 - Customer
+Yeah, no problem. So what did you find?
 
-REQUIREMENTS:
-1. Add a timestamp at every speaker change (MM:SS or HH:MM:SS).
-2. Identify speakers by name if stated; otherwise use “Speaker 1”, “Speaker 2”, etc.
-3. Include all speech — no summarizing or paraphrasing.
-4. Keep filler words, hesitations, and interruptions.
-5. Mark unclear words as [inaudible] or [unclear].
-6. The transcript must cover the full duration of the recording.
-7. Output plain text only — no markdown, no commentary.`
+0:08 - Mike
+Well, let me show you the inspection results...
+
+0:15 - Customer
+Okay, sounds good.
+
+STRICT REQUIREMENTS:
+
+1. NEW TIMESTAMP EVERY 5-15 SECONDS or at every speaker change (whichever is sooner)
+2. Format: "M:SS - Name" or "H:MM:SS - Name" (no brackets, no colons after name)
+3. Speaker names: Use actual names if mentioned, otherwise "Speaker 1", "Speaker 2"
+4. VERBATIM transcription - every word, filler, hesitation, interruption
+5. [inaudible] or [unclear] for unintelligible parts
+6. Cover 100% of the audio from start to end
+7. Plain text only - NO markdown, NO commentary, NO summaries
+8. Expect 1000+ timestamp entries for hour+ recordings
+
+For a 2-hour recording, you should produce approximately 500-1000+ timestamped entries.
+This is NOT a summary - it's a complete word-for-word transcript with frequent timestamps.`
 
 // Helper functions
 function formatTime(seconds: number): string {
@@ -257,11 +236,9 @@ async function processTranscription(params: {
 
   try {
     const ai = new GoogleGenAI({ apiKey: geminiApiKey })
+    await updateProgress(supabase, analysisId, 'Preparing audio...')
 
-    // Step 1: Get signed URL
-    console.log('🔗 Getting signed URL...')
-    await updateProgress(supabase, analysisId, 'Preparing audio file...')
-
+    // Get signed URL and upload to Gemini
     const { data: signedUrlData, error: signedUrlError } = await supabase.storage
       .from('audio-files')
       .createSignedUrl(filePath, 3600)
@@ -270,25 +247,15 @@ async function processTranscription(params: {
       throw new Error('Failed to get signed URL')
     }
 
-    // Step 2: Download and upload to Gemini
-    console.log('📤 Uploading to Gemini...')
-    await updateProgress(supabase, analysisId, 'Uploading audio to AI...')
-
     const mimeType = getMimeType(filePath)
-    
-    // Fetch audio from storage
-    const audioResponse = await fetch(signedUrlData.signedUrl, {
-      signal: AbortSignal.timeout(300000), // 5 min timeout
-    })
-    
+    const audioResponse = await fetch(signedUrlData.signedUrl)
     if (!audioResponse.ok) {
       throw new Error(`Failed to fetch audio: ${audioResponse.status}`)
     }
     
-    const audioBlob = await audioResponse.blob()
-    const audioBuffer = await audioBlob.arrayBuffer()
+    const audioBuffer = await (await audioResponse.blob()).arrayBuffer()
+    console.log(`📤 Uploading ${(audioBuffer.byteLength / 1024 / 1024).toFixed(1)}MB to Gemini...`)
     
-    // Upload to Gemini
     const uploadResult = await ai.files.upload({
       file: new Blob([audioBuffer], { type: mimeType }),
       config: { mimeType },
@@ -298,8 +265,7 @@ async function processTranscription(params: {
       throw new Error('Upload returned no URI')
     }
 
-    console.log(`✅ File uploaded: ${uploadResult.name}`)
-    console.log(`📊 Initial file state: ${uploadResult.state}`)
+    console.log(`✅ File ready: ${uploadResult.name}`)
 
     // Step 3: Wait for processing - MUST be ACTIVE before use
     let file = uploadResult
@@ -461,9 +427,7 @@ async function processW4Analysis(params: {
     
     await updateProgress(supabase, analysisId, 'Starting W4 analysis...', 'analyzing')
 
-    // Re-upload audio for analysis (need tone, pauses, etc.)
-    console.log('📤 Re-uploading audio for W4 analysis...')
-    
+    // Re-upload audio for W4 analysis (need tone, pauses, etc.)
     const { data: signedUrlData } = await supabase.storage
       .from('audio-files')
       .createSignedUrl(filePath, 3600)
@@ -473,20 +437,14 @@ async function processW4Analysis(params: {
     }
 
     const mimeType = getMimeType(filePath)
-    
-    // Fetch audio from storage
-    const audioResponse = await fetch(signedUrlData.signedUrl, {
-      signal: AbortSignal.timeout(300000),
-    })
-    
+    const audioResponse = await fetch(signedUrlData.signedUrl)
     if (!audioResponse.ok) {
       throw new Error(`Failed to fetch audio: ${audioResponse.status}`)
     }
     
-    const audioBlob = await audioResponse.blob()
-    const audioBuffer = await audioBlob.arrayBuffer()
+    const audioBuffer = await (await audioResponse.blob()).arrayBuffer()
+    console.log(`📤 Uploading ${(audioBuffer.byteLength / 1024 / 1024).toFixed(1)}MB for W4...`)
     
-    // Upload to Gemini
     const uploadResult = await ai.files.upload({
       file: new Blob([audioBuffer], { type: mimeType }),
       config: { mimeType },
@@ -496,8 +454,7 @@ async function processW4Analysis(params: {
       throw new Error('Upload returned no URI')
     }
 
-    console.log(`✅ File uploaded for W4: ${uploadResult.name}`)
-    console.log(`📊 Initial file state: ${uploadResult.state}`)
+    console.log(`✅ W4 file ready: ${uploadResult.name}`)
 
     // Wait for processing - MUST be ACTIVE before use
     let file = uploadResult

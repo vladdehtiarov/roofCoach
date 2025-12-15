@@ -113,42 +113,100 @@ export default function TranscriptPanel({
       // Not JSON, continue to plain text parsing
     }
     
-    // Parse plain text format
-    const result: TranscriptEntry[] = []
+    // Parse plain text format - multiple format support
+    const rawEntries: TranscriptEntry[] = []
     const lines = transcript.split('\n')
     let currentEntry: { speaker: string; timestamp: string; text: string[] } | null = null
     
     for (const line of lines) {
-      const timestampMatch = line.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(.+)$/)
+      // Format 1: "0:00 - Speaker Name" or "00:00:00 - Speaker Name"
+      const format1 = line.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—:]\s*(.+)$/)
+      // Format 2: "[0:00] Speaker Name:" or "(00:00) Speaker:"
+      const format2 = line.match(/^[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?\s*([^:]+):?\s*$/)
+      // Format 3: "Speaker Name (0:00):" or "Speaker [00:00]"
+      const format3 = line.match(/^([^(\[]+)\s*[\[(](\d{1,2}:\d{2}(?::\d{2})?)[\])]:?\s*$/)
+      // Format 4: "**0:00** - Speaker" (markdown bold timestamps)
+      const format4 = line.match(/^\*?\*?(\d{1,2}:\d{2}(?::\d{2})?)\*?\*?\s*[-–—:]\s*(.+)$/)
       
-      if (timestampMatch) {
-        if (currentEntry) {
-          result.push({
+      const match = format1 || format4
+      const matchAlt = format2 || format3
+      
+      if (match) {
+        if (currentEntry && currentEntry.text.length > 0) {
+          rawEntries.push({
             speaker: currentEntry.speaker,
             timestamp: currentEntry.timestamp,
             text: currentEntry.text.join(' ').trim()
           })
         }
         currentEntry = {
-          timestamp: timestampMatch[1],
-          speaker: timestampMatch[2].trim(),
+          timestamp: match[1],
+          speaker: match[2].trim().replace(/:$/, ''),
+          text: []
+        }
+      } else if (matchAlt) {
+        if (currentEntry && currentEntry.text.length > 0) {
+          rawEntries.push({
+            speaker: currentEntry.speaker,
+            timestamp: currentEntry.timestamp,
+            text: currentEntry.text.join(' ').trim()
+          })
+        }
+        const ts = format2 ? matchAlt[1] : matchAlt[2]
+        const spk = format2 ? matchAlt[2] : matchAlt[1]
+        currentEntry = {
+          timestamp: ts,
+          speaker: spk.trim().replace(/:$/, ''),
           text: []
         }
       } else if (currentEntry && line.trim()) {
+        // Add non-empty lines as text content
         currentEntry.text.push(line.trim())
       }
     }
     
-    if (currentEntry) {
-      result.push({
+    // Don't forget the last entry
+    if (currentEntry && currentEntry.text.length > 0) {
+      rawEntries.push({
         speaker: currentEntry.speaker,
         timestamp: currentEntry.timestamp,
         text: currentEntry.text.join(' ').trim()
       })
     }
     
-    if (result.length === 0 && transcript.trim()) {
+    // Fallback: if no entries parsed, show raw transcript
+    if (rawEntries.length === 0 && transcript.trim()) {
+      // Try to split by any pattern that looks like speaker changes
+      const fallbackEntries = transcript.split(/(?=\d{1,2}:\d{2})/g).filter(Boolean)
+      if (fallbackEntries.length > 1) {
+        return fallbackEntries.map((chunk, i) => ({
+          speaker: `Segment ${i + 1}`,
+          text: chunk.trim(),
+          timestamp: chunk.match(/(\d{1,2}:\d{2}(?::\d{2})?)/)?.[1] || '0:00'
+        }))
+      }
       return [{ speaker: 'Transcript', text: transcript, timestamp: '0:00' }]
+    }
+    
+    // Split long entries into smaller chunks (max ~200 words per entry)
+    const MAX_WORDS = 200
+    const result: TranscriptEntry[] = []
+    
+    for (const entry of rawEntries) {
+      const words = entry.text.split(/\s+/)
+      if (words.length <= MAX_WORDS) {
+        result.push(entry)
+      } else {
+        // Split into chunks
+        for (let i = 0; i < words.length; i += MAX_WORDS) {
+          const chunk = words.slice(i, i + MAX_WORDS).join(' ')
+          result.push({
+            speaker: entry.speaker,
+            timestamp: i === 0 ? entry.timestamp : `${entry.timestamp}+`,
+            text: chunk
+          })
+        }
+      }
     }
     
     return result
