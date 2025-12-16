@@ -1,5 +1,5 @@
 -- ============================================
--- RoofCoach Database Schema
+-- REPFUEL Database Schema
 -- ============================================
 
 -- Enable UUID extension (should be enabled by default in Supabase)

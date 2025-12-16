@@ -137,7 +137,7 @@ export interface TranscriptSection {
 export type AnalysisStatus = 'pending' | 'processing' | 'done' | 'error'
 
 // ============================================================================
-// W4 SALES SYSTEM TYPES (RoofCoach methodology)
+// W4 SALES SYSTEM TYPES (RepFuel methodology)
 // ============================================================================
 
 // Performance ratings

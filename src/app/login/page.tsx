@@ -57,7 +57,7 @@ export default function LoginPage() {
           <div className="text-center mb-8">
             <Image
               src="/Logo.svg"
-              alt="RoofCoach"
+              alt="REPFUEL"
               width={180}
               height={54}
               className="mx-auto mb-4 h-auto"

@@ -1,4 +1,4 @@
-# RoofCoach
+# REPFUEL
 
 A Next.js application with Supabase for user authentication, audio file uploads (up to 3 hours), and AI-powered transcription.
 
@@ -40,7 +40,7 @@ profiles (1) ─── (∞) recordings ─── (∞) transcripts
 ### 1. Clone and Install
 
 ```bash
-cd RoofCoach
+cd repfuel
 npm install
 ```
 

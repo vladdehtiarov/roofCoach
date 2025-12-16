@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { W4_OUTPUT_FORMAT } from '@/app/api/analyze/w4-prompt'
 
 // GET - Fetch prompt by name
 export async function GET(request: Request) {
@@ -38,7 +39,10 @@ export async function GET(request: Request) {
       throw error
     }
 
-    return NextResponse.json({ prompt })
+    return NextResponse.json({ 
+      prompt,
+      lockedOutput: W4_OUTPUT_FORMAT 
+    })
   } catch (error) {
     console.error('Error fetching prompt:', error)
     return NextResponse.json(

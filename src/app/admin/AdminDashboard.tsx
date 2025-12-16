@@ -102,6 +102,8 @@ export default function AdminDashboard({ user }: { user: User }) {
   const [promptLoading, setPromptLoading] = useState(false)
   const [promptSaving, setPromptSaving] = useState(false)
   const [promptMessage, setPromptMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [lockedOutput, setLockedOutput] = useState('')
+  const [showLockedOutput, setShowLockedOutput] = useState(false)
   
   const router = useRouter()
   const toast = useToast()
@@ -153,7 +155,10 @@ export default function AdminDashboard({ user }: { user: User }) {
       const response = await fetch('/api/admin/prompt?name=w4_analysis')
       const data = await response.json()
       
-      if (data.prompt) {
+      // Store locked output format
+      if (data.lockedOutput) setLockedOutput(data.lockedOutput)
+      
+      if (data.prompt?.prompt) {
         setPrompt(data.prompt.prompt)
         setOriginalPrompt(data.prompt.prompt)
         setPromptDescription(data.prompt.description || '')
@@ -164,6 +169,7 @@ export default function AdminDashboard({ user }: { user: User }) {
           const defaultData = await defaultResponse.json()
           setPrompt(defaultData.prompt || '')
           setOriginalPrompt(defaultData.prompt || '')
+          if (defaultData.lockedOutput) setLockedOutput(defaultData.lockedOutput)
         }
       }
     } catch (err) {
@@ -388,7 +394,7 @@ export default function AdminDashboard({ user }: { user: User }) {
             <Link href="/" className="flex items-center gap-3">
               <Image
                 src="/Logo.svg"
-                alt="RoofCoach"
+                alt="REPFUEL"
                 width={140}
                 height={40}
                 className="h-10 w-auto"
@@ -623,47 +629,208 @@ export default function AdminDashboard({ user }: { user: User }) {
                 </div>
               )}
 
+              {/* Prompt Structure Overview */}
+              <div className="grid lg:grid-cols-4 gap-4">
+                {/* Flow Step 1 */}
+                <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 text-xs font-bold">1</div>
+                    <span className="text-blue-400 font-medium text-sm">Audio</span>
+                    <span className="ml-auto px-2 py-0.5 rounded text-xs bg-blue-500/20 text-blue-300">Auto</span>
+                  </div>
+                  <p className="text-slate-400 text-xs">Audio file attached to Gemini request</p>
+                </div>
+                
+                {/* Flow Step 2 */}
+                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-xs font-bold">2</div>
+                    <span className="text-emerald-400 font-medium text-sm">W4 Prompt</span>
+                    <span className="ml-auto px-2 py-0.5 rounded text-xs bg-emerald-500/20 text-emerald-300">✏️ Edit</span>
+                  </div>
+                  <p className="text-slate-400 text-xs">Role, scoring criteria, checkpoints, red flags</p>
+                </div>
+                
+                {/* Flow Step 3 */}
+                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-6 h-6 rounded-full bg-red-500/20 flex items-center justify-center text-red-400 text-xs font-bold">3</div>
+                    <span className="text-red-400 font-medium text-sm">JSON Output</span>
+                    <span className="ml-auto px-2 py-0.5 rounded text-xs bg-red-500/20 text-red-300">🔒 Locked</span>
+                  </div>
+                  <p className="text-slate-400 text-xs">JSON schema for app compatibility</p>
+                </div>
+                
+                {/* Flow Step 4 */}
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-6 h-6 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-400 text-xs font-bold">4</div>
+                    <span className="text-amber-400 font-medium text-sm">Runtime</span>
+                    <span className="ml-auto px-2 py-0.5 rounded text-xs bg-amber-500/20 text-amber-300">Auto</span>
+                  </div>
+                  <p className="text-slate-400 text-xs">Duration + strict scoring rules</p>
+                </div>
+              </div>
+
               {/* Description */}
               <div>
                 <label className="block text-sm font-medium text-slate-400 mb-2">
-                  Description (optional)
+                  Version Description (optional)
                 </label>
                 <input
                   type="text"
                   value={promptDescription}
                   onChange={(e) => setPromptDescription(e.target.value)}
-                  placeholder="Brief description of this prompt version"
+                  placeholder="e.g., Updated checkpoint scoring for Q2 2024"
                   className="w-full px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
               </div>
 
-              {/* Prompt Editor */}
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/50 bg-slate-900/50">
-                  <span className="text-sm text-slate-400">Prompt Editor</span>
-                  <span className="text-xs text-slate-500">
-                    {prompt.length.toLocaleString()} characters
-                  </span>
+              {/* Main Editor Section */}
+              <div className="grid lg:grid-cols-4 gap-4">
+                {/* Main Prompt Editor - 3 columns */}
+                <div className="lg:col-span-3 bg-slate-800/50 backdrop-blur-sm rounded-xl border border-emerald-500/30 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/50 bg-emerald-500/10">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      <span className="text-sm font-medium text-emerald-400">W4 Analysis Prompt</span>
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {prompt.length.toLocaleString()} chars
+                    </span>
+                  </div>
+                  <textarea
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    className="w-full h-[calc(100vh-550px)] min-h-[400px] p-4 bg-slate-950 text-slate-200 font-mono text-sm resize-none focus:outline-none"
+                    spellCheck={false}
+                    placeholder="Enter the W4 analysis prompt here..."
+                  />
                 </div>
-                <textarea
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  className="w-full h-[calc(100vh-500px)] min-h-[400px] p-4 bg-slate-950 text-slate-200 font-mono text-sm resize-none focus:outline-none"
-                  spellCheck={false}
-                  placeholder="Enter the W4 analysis prompt here..."
-                />
+
+                {/* Side Panel - Locked Output Format */}
+                <div className="space-y-4">
+                  {/* Locked JSON Output Format */}
+                  <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-red-500/30 overflow-hidden">
+                    <button
+                      onClick={() => setShowLockedOutput(!showLockedOutput)}
+                      className="w-full flex items-center justify-between px-4 py-3 border-b border-slate-700/50 bg-red-500/10 hover:bg-red-500/20 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                        <span className="text-sm font-medium text-red-400">🔒 JSON Output Format</span>
+                      </div>
+                      <svg className={`w-4 h-4 text-red-400 transition-transform ${showLockedOutput ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {showLockedOutput && (
+                      <div className="p-3 font-mono text-xs text-slate-400 max-h-[400px] overflow-auto bg-slate-900/50">
+                        <div className="text-red-400/70 mb-2 text-[10px]">⚠️ This section cannot be edited - it ensures proper data structure</div>
+                        <pre className="whitespace-pre-wrap text-red-300/50">{lockedOutput || 'Loading...'}</pre>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dynamic Runtime Additions */}
+                  <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-amber-500/20 overflow-hidden">
+                    <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-700/50 bg-amber-500/10">
+                      <svg className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      <span className="text-sm font-medium text-amber-400">⚡ Runtime Additions</span>
+                    </div>
+                    <div className="p-3 font-mono text-xs text-slate-400">
+                      <pre className="whitespace-pre-wrap text-amber-300/70">{`AUDIO DURATION: {auto-detected}
+
+## STRICT SCORING RULES
+1. Default to 0 points
+2. No assumptions  
+3. Partial credit is rare
+4. Be skeptical
+5. Quote requirement
+6. When in doubt, score LOWER
+7. Average = 40-55 points
+
+DO NOT include full transcript
+Focus on GAPS and WEAKNESSES`}</pre>
+                    </div>
+                  </div>
+
+                  {/* Model Info */}
+                  <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 p-4">
+                    <h4 className="text-sm font-medium text-slate-300 mb-2">Model Settings</h4>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Model</span>
+                        <span className="text-slate-300 font-mono">gemini-3-pro-preview</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Temperature</span>
+                        <span className="text-slate-300 font-mono">0.1</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Max Tokens</span>
+                        <span className="text-slate-300 font-mono">32,000</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Output</span>
+                        <span className="text-slate-300 font-mono">JSON only</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {/* Help text */}
-              <div className="p-4 bg-slate-800/30 border border-slate-700/30 rounded-lg">
-                <h3 className="text-sm font-medium text-slate-300 mb-2">Tips:</h3>
-                <ul className="text-xs text-slate-500 space-y-1">
-                  <li>• The prompt must instruct the AI to return valid JSON</li>
-                  <li>• Include all 15 checkpoints with scoring criteria</li>
-                  <li>• Use specific detection criteria and red flags for consistency</li>
-                  <li>• Changes take effect immediately for new analyses</li>
-                  <li>• Test with a sample recording after making changes</li>
-                </ul>
+              {/* Quick Reference */}
+              <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg p-4">
+                <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  W4 Checkpoints Quick Reference
+                </h3>
+                <div className="grid sm:grid-cols-4 gap-4 text-xs">
+                  <div>
+                    <h4 className="text-amber-400 font-medium mb-1">WHY Phase (38 pts)</h4>
+                    <ul className="text-slate-500 space-y-0.5">
+                      <li>• Sitdown/Transition (5)</li>
+                      <li>• Rapport Building (5)</li>
+                      <li>• Assessment Q&apos;s (12)</li>
+                      <li>• Inspection (3)</li>
+                      <li>• Present Findings (5)</li>
+                      <li>• Tie-Down WHY (8)</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="text-blue-400 font-medium mb-1">WHAT Phase (27 pts)</h4>
+                    <ul className="text-slate-500 space-y-0.5">
+                      <li>• Formal Presentation (5)</li>
+                      <li>• System Options (12)</li>
+                      <li>• Backup/Visuals (5)</li>
+                      <li>• Tie-Down WHAT (5)</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="text-purple-400 font-medium mb-1">WHO Phase (25 pts)</h4>
+                    <ul className="text-slate-500 space-y-0.5">
+                      <li>• Company Advantages (8)</li>
+                      <li>• Pyramid of Pain (8)</li>
+                      <li>• WHO Tie-Down (9)</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="text-emerald-400 font-medium mb-1">WHEN Phase (10 pts)</h4>
+                    <ul className="text-slate-500 space-y-0.5">
+                      <li>• Price Presentation (5)</li>
+                      <li>• Post-Close Silence (5)</li>
+                    </ul>
+                  </div>
+                </div>
               </div>
             </div>
           )

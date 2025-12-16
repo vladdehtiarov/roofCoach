@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { W4_ANALYSIS_PROMPT } from './w4-prompt'
+import { W4_EDITABLE_CONTENT, W4_OUTPUT_FORMAT } from './w4-prompt'
 
 // Dynamic import to avoid build issues
 let GoogleGenAI: typeof import('@google/genai').GoogleGenAI
@@ -270,8 +270,8 @@ async function processAnalysis(params: {
     console.log('🤖 Generating W4 analysis...')
     await updateProgress(supabase, analysisId, 'AI is analyzing the call using W4 methodology...')
 
-    // Try to get prompt from database, fall back to file
-    let basePrompt = W4_ANALYSIS_PROMPT
+    // Try to get EDITABLE content from database, fall back to file
+    let editableContent = W4_EDITABLE_CONTENT
     const { data: dbPrompt } = await supabase
       .from('admin_prompts')
       .select('prompt')
@@ -280,15 +280,15 @@ async function processAnalysis(params: {
       .single()
     
     if (dbPrompt?.prompt) {
-      console.log('📝 Using custom prompt from database')
-      basePrompt = dbPrompt.prompt
+      console.log('📝 Using custom W4 content from database')
+      editableContent = dbPrompt.prompt
     } else {
-      console.log('📝 Using default prompt from file')
+      console.log('📝 Using default W4 content from file')
     }
 
-    // Add duration info and STRICT scoring rules to prompt
+    // Combine: editable content + locked OUTPUT_FORMAT + dynamic rules
     const durationStr = formatTime(durationSeconds)
-    const dynamicPrompt = basePrompt + `
+    const dynamicPrompt = editableContent + W4_OUTPUT_FORMAT + `
 
 AUDIO DURATION: ${durationStr} (${Math.round(durationSeconds / 60)} minutes).
 

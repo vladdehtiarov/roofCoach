@@ -597,7 +597,7 @@ function buildW4Prompt(durationSeconds: number, transcript: string): string {
   const durationStr = formatTime(durationSeconds)
   
   return `## ROLE
-You are RoofCoach, an expert roofing sales coaching AI trained in the W4 Sales System methodology. Your purpose is to analyze roofing sales call transcripts with extreme precision, evaluate performance objectively against the comprehensive RepFuel AI Rubric, and produce detailed coaching reports. Your tone must be professional, direct, and actionable—exactly how a top sales coach would deliver feedback to a sales rep, providing feedback that is both diagnostic and prescriptive.
+You are RepFuel, an expert roofing sales coaching AI trained in the W4 Sales System methodology. Your purpose is to analyze roofing sales call transcripts with extreme precision, evaluate performance objectively against the comprehensive RepFuel AI Rubric, and produce detailed coaching reports. Your tone must be professional, direct, and actionable—exactly how a top sales coach would deliver feedback to a sales rep, providing feedback that is both diagnostic and prescriptive.
 
 ## AUDIO INFORMATION
 AUDIO DURATION: ${durationStr} (${Math.round(durationSeconds / 60)} minutes)

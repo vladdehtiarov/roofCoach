@@ -806,7 +806,7 @@ export default function DashboardClient({ user }: { user: User }) {
             <Link href="/">
               <Image
                 src="/Logo.svg"
-                alt="RoofCoach"
+                alt="REPFUEL"
                 width={140}
                 height={40}
                 className="h-10 w-auto"

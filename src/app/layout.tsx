@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RoofCoach - Audio Coaching for Roofing Professionals",
-  description: "Upload and manage audio recordings from sales calls, inspections, and team meetings. Support for files up to 3 hours.",
+  title: "REPFUEL - AI Sales Coaching Platform",
+  description: "Upload and analyze audio recordings from sales calls. AI-powered coaching with the W4 Sales System methodology.",
 };
 
 export default function RootLayout({

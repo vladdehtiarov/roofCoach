@@ -25,7 +25,7 @@ export default async function Home() {
           <div className="flex items-center justify-between h-16">
         <Image
               src="/Logo.svg"
-              alt="RoofCoach"
+              alt="REPFUEL"
               width={140}
               height={40}
               className="h-10 w-auto"
@@ -72,7 +72,7 @@ export default async function Home() {
           <div className="mb-8 mt-8">
             <Image
               src="/Logo.svg"
-              alt="RoofCoach"
+              alt="REPFUEL"
               width={200}
               height={60}
               className="mx-auto mb-6 h-auto"
@@ -94,7 +94,7 @@ export default async function Home() {
           </h1>
           
           <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-10">
-            RoofCoach helps roofing professionals record and analyze sales calls, inspections, and team meetings. Capture audio directly from your browser or upload existing files.
+            REPFUEL helps sales professionals record and analyze sales calls with AI-powered coaching. Capture audio directly from your browser or upload existing files.
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -190,7 +190,7 @@ export default async function Home() {
       <footer className="relative border-t border-slate-700/50 py-6">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <p className="text-slate-500 text-sm">
-            © {new Date().getFullYear()} RoofCoach. All rights reserved.
+            © {new Date().getFullYear()} REPFUEL. All rights reserved.
           </p>
         </div>
       </footer>
