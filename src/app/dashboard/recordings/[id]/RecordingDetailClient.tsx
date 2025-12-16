@@ -509,6 +509,7 @@ export default function RecordingDetailClient({ recording, analysis: initialAnal
                 clientName={w4Report.client_name}
                 repName={w4Report.rep_name}
                 companyName={w4Report.company_name}
+                saleOutcome={w4Report.sale_outcome}
               />
 
               {/* Phase Cards - 2x2 grid on desktop, 1 col on mobile */}

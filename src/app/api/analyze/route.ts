@@ -432,6 +432,7 @@ Focus on finding GAPS and WEAKNESSES, not praising what was done.`
       client_name: analysisResult.client_name || 'Unknown',
       rep_name: analysisResult.rep_name || 'Unknown',
       company_name: analysisResult.company_name || 'Unknown',
+      sale_outcome: analysisResult.sale_outcome || null,
       overall_performance: analysisResult.overall_performance || {
         total_score: 0,
         rating: 'Below Prospect',

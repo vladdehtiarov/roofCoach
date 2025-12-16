@@ -1,17 +1,21 @@
 'use client'
 
-import { W4OverallPerformance as W4OverallPerformanceType, W4Rating, getW4RatingColor } from '@/types/database'
+import { W4OverallPerformance as W4OverallPerformanceType, W4Rating, getW4RatingColor, SaleOutcome } from '@/types/database'
 
 interface Props {
   performance: W4OverallPerformanceType
   clientName: string
   repName: string
   companyName: string
+  saleOutcome?: SaleOutcome
 }
 
-export function W4OverallPerformance({ performance, clientName, repName, companyName }: Props) {
-  const { total_score, rating, summary } = performance
+export function W4OverallPerformance({ performance, clientName, repName, companyName, saleOutcome }: Props) {
+  const { total_score, raw_score, sale_adjusted_score, rating, summary } = performance
   const color = getW4RatingColor(rating as W4Rating)
+  
+  const hasAdjustment = raw_score !== undefined && sale_adjusted_score !== undefined && raw_score !== sale_adjusted_score
+  const displayScore = total_score
   
   // Calculate stroke dasharray for circular progress
   const radius = 70
@@ -19,8 +23,51 @@ export function W4OverallPerformance({ performance, clientName, repName, company
   const progress = (total_score / 100) * circumference
   const strokeDasharray = `${progress} ${circumference}`
   
+  // Sale outcome styling
+  const getSaleOutcomeStyle = () => {
+    if (!saleOutcome) return null
+    if (saleOutcome.closed) {
+      return { bg: 'bg-green-500/10', border: 'border-green-500/30', text: 'text-green-400', icon: '✓' }
+    }
+    if (saleOutcome.outcome_type === 'FOLLOW_UP') {
+      return { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-400', icon: '⏳' }
+    }
+    return { bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-400', icon: '✗' }
+  }
+  
+  const outcomeStyle = getSaleOutcomeStyle()
+  
   return (
     <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-800">
+      {/* Sale Outcome Banner */}
+      {saleOutcome && outcomeStyle && (
+        <div className={`${outcomeStyle.bg} ${outcomeStyle.border} border rounded-xl p-4 mb-6`}>
+          <div className="flex items-center gap-3">
+            <span className={`text-2xl`}>{outcomeStyle.icon}</span>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className={`font-semibold ${outcomeStyle.text}`}>
+                  {saleOutcome.closed ? 'Sale Closed' : 
+                   saleOutcome.outcome_type === 'FOLLOW_UP' ? 'Follow-up Scheduled' : 
+                   saleOutcome.outcome_type === 'UNKNOWN' ? 'Outcome Unknown' : 'No Sale'}
+                </span>
+                {hasAdjustment && (
+                  <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">
+                    Score adjusted: {raw_score} → {sale_adjusted_score}
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-gray-400 mt-1">{saleOutcome.evidence}</p>
+              {saleOutcome.objection_reason && (
+                <p className="text-sm text-gray-500 mt-1">
+                  <span className="text-gray-600">Objection:</span> {saleOutcome.objection_reason}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
@@ -74,8 +121,11 @@ export function W4OverallPerformance({ performance, clientName, repName, company
           </svg>
           {/* Score text */}
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-5xl font-bold text-white">{total_score}</span>
+            <span className="text-5xl font-bold text-white">{displayScore}</span>
             <span className="text-gray-500 text-sm">/ 100</span>
+            {hasAdjustment && (
+              <span className="text-xs text-gray-600 mt-1 line-through">{raw_score}</span>
+            )}
           </div>
         </div>
         
@@ -83,33 +133,6 @@ export function W4OverallPerformance({ performance, clientName, repName, company
         <div className="flex-1">
           <h3 className="text-sm font-medium text-gray-400 mb-2">Summary</h3>
           <p className="text-gray-300 leading-relaxed">{summary}</p>
-        </div>
-      </div>
-      
-      {/* Rating Legend */}
-      <div className="mt-6 pt-4 border-t border-gray-800">
-        <div className="flex flex-wrap gap-3 text-xs">
-          {[
-            { rating: 'MVP', range: '90-100', color: '#22c55e' },
-            { rating: 'Playmaker', range: '75-89', color: '#3b82f6' },
-            { rating: 'Starter', range: '60-74', color: '#eab308' },
-            { rating: 'Prospect', range: '45-59', color: '#f97316' },
-            { rating: 'Below Prospect', range: '0-44', color: '#ef4444' },
-          ].map((item) => (
-            <div 
-              key={item.rating}
-              className={`flex items-center gap-1.5 px-2 py-1 rounded ${
-                rating === item.rating ? 'bg-gray-800' : ''
-              }`}
-            >
-              <div 
-                className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: item.color }}
-              />
-              <span className="text-gray-400">{item.rating}</span>
-              <span className="text-gray-600">({item.range})</span>
-            </div>
-          ))}
         </div>
       </div>
     </div>

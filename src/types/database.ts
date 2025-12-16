@@ -140,6 +140,16 @@ export type AnalysisStatus = 'pending' | 'processing' | 'done' | 'error'
 // W4 SALES SYSTEM TYPES (RepFuel methodology)
 // ============================================================================
 
+// Sale outcome types
+export type SaleOutcomeType = 'CLOSED' | 'NO_SALE' | 'FOLLOW_UP' | 'UNKNOWN'
+
+export interface SaleOutcome {
+  closed: boolean
+  outcome_type: SaleOutcomeType
+  evidence: string
+  objection_reason: string | null
+}
+
 // Performance ratings
 export type W4Rating = 'MVP' | 'Playmaker' | 'Starter' | 'Prospect' | 'Below Prospect'
 
@@ -198,6 +208,8 @@ export interface W4RankAssessment {
 // Overall performance summary
 export interface W4OverallPerformance {
   total_score: number
+  raw_score?: number           // Score before sale adjustment
+  sale_adjusted_score?: number // Score after sale adjustment
   rating: W4Rating
   summary: string
 }
@@ -208,6 +220,9 @@ export interface W4Report {
   client_name: string
   rep_name: string
   company_name: string
+  
+  // Sale outcome (did the call result in a closed sale?)
+  sale_outcome?: SaleOutcome
   
   // Overall performance
   overall_performance: W4OverallPerformance
