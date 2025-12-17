@@ -6,6 +6,7 @@ import { useToast } from '@/components/ui/Toast'
 import { Recording } from '@/types/database'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
+import { saveRecordingOffline, generateOfflineId, isOnline } from '@/lib/offlineStorage'
 
 interface AudioRecorderProps {
   onRecordingComplete?: (recording: Recording) => void
@@ -417,6 +418,36 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
       let extension = 'webm'
       if (mimeType.includes('mp4')) extension = 'm4a'
       else if (mimeType.includes('mp3') || mimeType.includes('mpeg')) extension = 'mp3'
+      
+      // Check if offline - save locally instead of uploading
+      if (!isOnline()) {
+        console.log('📵 Offline - saving recording locally')
+        const safeName = recordingName.replace(/[^a-zA-Z0-9\s]/g, '').trim() || 'recording'
+        const fileName = `${safeName.replace(/\s+/g, '_')}_${Date.now()}.${extension}`
+        
+        const offlineId = generateOfflineId()
+        await saveRecordingOffline({
+          id: offlineId,
+          fileName: fileName,
+          fileSize: audioBlob.size,
+          mimeType: mimeType || 'audio/webm',
+          audioBlob: audioBlob,
+          createdAt: new Date().toISOString(),
+          userId: user.id,
+        })
+        
+        setUploadProgress(100)
+        toast.success('Recording saved offline! Will upload when you\'re back online.')
+        
+        // Reset state
+        setIsUploading(false)
+        setUploadProgress(0)
+        setUploadStage('idle')
+        setAudioBlob(null)
+        setAudioUrl(null)
+        setRecordingName('')
+        return
+      }
       
       // Create file paths
       const timestamp = Date.now()

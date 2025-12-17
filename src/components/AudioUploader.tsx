@@ -7,6 +7,7 @@ import { useToast } from '@/components/ui/Toast'
 import { Recording, RecordingInsert } from '@/types/database'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
+import { saveRecordingOffline, generateOfflineId, isOnline } from '@/lib/offlineStorage'
 
 interface UploadProgress {
   loaded: number
@@ -625,10 +626,34 @@ export default function AudioUploader({
     setProgress({ loaded: 0, total: file.size, percentage: 0 })
 
     try {
-      // Get current user
+      // Get current user (we need this even for offline to store userId)
       const { data: { user }, error: userError } = await supabase.auth.getUser()
       if (userError || !user) {
         throw new Error('Please sign in to upload files')
+      }
+      
+      // Check if offline - save locally instead of uploading
+      if (!isOnline()) {
+        console.log('📵 Offline - saving recording locally')
+        setUploadStage('uploading')
+        
+        const offlineId = generateOfflineId()
+        await saveRecordingOffline({
+          id: offlineId,
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type || 'audio/mpeg',
+          audioBlob: file,
+          createdAt: new Date().toISOString(),
+          userId: user.id,
+        })
+        
+        setProgress({ loaded: 100, total: 100, percentage: 100 })
+        toast.success('Recording saved offline! Will upload when you\'re back online.')
+        setUploading(false)
+        setFileName('')
+        setProgress(null)
+        return
       }
 
       const { data: { session } } = await supabase.auth.getSession()

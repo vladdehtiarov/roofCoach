@@ -14,6 +14,7 @@ import { ConfirmModal } from '@/components/ui/Modal'
 import { RecordingListSkeleton } from '@/components/ui/Skeleton'
 import { User } from '@supabase/supabase-js'
 import { Recording, RecordingWithTranscript, Tag, Folder } from '@/types/database'
+import { OfflineIndicator } from '@/components/OfflineIndicator'
 
 interface RecordingWithUrl extends RecordingWithTranscript {
   audioUrl?: string
@@ -1575,6 +1576,9 @@ export default function DashboardClient({ user }: { user: User }) {
           </div>
         </div>
       )}
+      
+      {/* Offline Status Indicator */}
+      <OfflineIndicator userId={user.id} />
     </div>
   )
 }
