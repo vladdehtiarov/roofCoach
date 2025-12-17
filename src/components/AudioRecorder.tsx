@@ -47,8 +47,32 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
   const analyserRef = useRef<AnalyserNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
   const animationFrameRef = useRef<number | null>(null)
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null)
 
   const toast = useToast()
+
+  // Wake Lock to keep screen on during recording (important for PWA)
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request('screen')
+        console.log('🔒 Wake Lock activated - screen will stay on')
+        
+        wakeLockRef.current.addEventListener('release', () => {
+          console.log('🔓 Wake Lock released')
+        })
+      } catch (err) {
+        console.log('Wake Lock not available:', err)
+      }
+    }
+  }
+
+  const releaseWakeLock = () => {
+    if (wakeLockRef.current) {
+      wakeLockRef.current.release()
+      wakeLockRef.current = null
+    }
+  }
 
   // Check microphone permission on mount
   useEffect(() => {
@@ -56,6 +80,7 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
     return () => {
       stopTimer()
       stopAudioAnalysis()
+      releaseWakeLock() // Release wake lock on unmount
       if (audioUrl) {
         URL.revokeObjectURL(audioUrl)
       }
@@ -271,6 +296,7 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
       setAudioUrl(null)
       startTimer()
       startAudioAnalysis(stream) // Start audio level visualization
+      requestWakeLock() // Keep screen on during recording (PWA)
 
     } catch (err) {
       console.error('Error accessing microphone:', err)
@@ -303,6 +329,7 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
       setIsPaused(false)
       stopTimer()
       stopAudioAnalysis() // Stop audio level visualization
+      releaseWakeLock() // Release screen lock (PWA)
     }
   }
 
@@ -974,6 +1001,13 @@ export default function AudioRecorder({ onRecordingComplete }: AudioRecorderProp
               <p className="text-slate-500 text-sm mt-6">
                 Click the white button to stop and save your recording
               </p>
+              
+              {/* PWA Warning */}
+              <div className="mt-4 px-4 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                <p className="text-amber-400 text-xs text-center">
+                  ⚠️ Keep app open while recording. Don&apos;t minimize or switch apps.
+                </p>
+              </div>
             </div>
           </div>
         </div>
